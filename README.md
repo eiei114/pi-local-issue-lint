@@ -1,83 +1,91 @@
-# Pi Extension Template
+# pi-local-issue-lint
 
-[![Join dotfield.xyz on Discord](https://img.shields.io/badge/Join%20dotfield.xyz%20on%20Discord-5865F2?logo=discord&logoColor=white)](https://discord.gg/4945dXZVW5)
-
-[![CI](https://github.com/eiei114/pi-extension-template/actions/workflows/ci.yml/badge.svg)](https://github.com/eiei114/pi-extension-template/actions/workflows/ci.yml)
-[![Publish](https://github.com/eiei114/pi-extension-template/actions/workflows/publish.yml/badge.svg)](https://github.com/eiei114/pi-extension-template/actions/workflows/publish.yml)
-[![npm version](https://img.shields.io/npm/v/create-pi-extension.svg)](https://www.npmjs.com/package/create-pi-extension)
-[![npm downloads](https://img.shields.io/npm/dm/create-pi-extension.svg)](https://www.npmjs.com/package/create-pi-extension)
+[![CI](https://github.com/eiei114/pi-local-issue-lint/actions/workflows/ci.yml/badge.svg)](https://github.com/eiei114/pi-local-issue-lint/actions/workflows/ci.yml)
+[![Publish](https://github.com/eiei114/pi-local-issue-lint/actions/workflows/publish.yml/badge.svg)](https://github.com/eiei114/pi-local-issue-lint/actions/workflows/publish.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Pi package](https://img.shields.io/badge/pi-package-purple.svg)](https://pi.dev/packages)
-[![Trusted Publishing](https://img.shields.io/badge/npm-Trusted%20Publishing-blue.svg)](docs/release.md)
-<a href="https://buymeacoffee.com/ekawano114m"><img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" alt="Buy Me A Coffee" width="217" height="60"></a>
 
-> Template for building Pi packages with extensions, Agent Skills, prompts, and themes.
+> Read-only lint for Multica Local Markdown Issues before import.
 
 ## What this is
 
-This repository is the **template source** for new Pi extension OSS projects. The published npm package is [`create-pi-extension`](https://www.npmjs.com/package/create-pi-extension) (the scaffold CLI). The repository root is **not** published to npm.
-
-`create-pi-extension` is live on npm — use `bunx create-pi-extension@latest` to scaffold a new project.
+`pi-local-issue-lint` gives issue authors a visible lint surface before real policy checks exist. Slice 01 is a walking skeleton: single-file targets return a stable stub JSON contract; directory and glob targets are accepted but not implemented yet.
 
 ## Features
 
-- Interactive `create-pi-extension` CLI for scoped and unscoped package names.
-- TypeScript-first examples for extensions, Agent Skills, prompts, themes, tools, and TUI components.
-- GitHub Actions CI, npm Trusted Publishing, security policy, issue templates, and release automation.
-- Canonical public README with standard badges, install paths, quick start, package contents, and security guidance.
-- Canonical scaffold README shared by CLI-first generation and the GitHub Template setup checklist.
+- `local_issue_lint` Pi tool with a TypeBox schema
+- `/local-issue-lint:check` human command that prints a readable stub summary
+- Stable JSON contract: `ok`, `summary`, `findings`
+- Read-only: no import, no Multica mutation, no auto-fix
 
-## Install
+## Install (local dogfood)
 
-Create a new Pi extension package with the published CLI:
+From a clone of this repository:
 
 ```bash
-bunx create-pi-extension@latest my-pi-package
+npm install
+pi -e .
+```
+
+From GitHub without publishing:
+
+```bash
+pi install git:github.com/eiei114/pi-local-issue-lint
+```
+
+Install into the current project instead of user Pi settings:
+
+```bash
+pi install git:github.com/eiei114/pi-local-issue-lint -l
 ```
 
 ## Quick start
 
-### Primary path (recommended)
+Run the human command:
 
-Scaffold a new project with the published CLI:
-
-```bash
-bunx create-pi-extension@latest my-pi-package
+```txt
+/local-issue-lint:check
 ```
 
-The CLI copies the bundled template, replaces placeholders, removes bootstrap docs, and can run `git init` plus `bun install`. See [`docs/template-checklist.md`](docs/template-checklist.md) for the minimal follow-up checklist.
+Pi prompts for an issue markdown file path. The command prints a stub summary such as:
 
-For a scoped package name:
-
-```bash
-bunx create-pi-extension@latest @my-scope/my-pi-tool
+```txt
+Local Issue Lint (walking skeleton)
+Target: Issues/01-walking-skeleton-lint-command.md
+Scanned: 1 | Ready: 1 | Errors: 0 | Warnings: 0 | Hints: 0
+OK
 ```
 
-### Secondary path: GitHub Template
+Agents can call the tool directly:
 
-Create a repository from this template when you prefer GitHub-first onboarding:
-
-```bash
-gh repo create OWNER/my-pi-package \
-  --template eiei114/pi-extension-template \
-  --clone
+```json
+{
+  "target": "Issues/01-walking-skeleton-lint-command.md"
+}
 ```
 
-Then follow the **Secondary path** section in [`docs/template-checklist.md`](docs/template-checklist.md) for manual placeholder replacement, metadata, and post-generation cleanup.
-That checklist first copies `scaffold/package-readme.md` to `README.md`, giving GitHub Template users the same standard badges and README structure as CLI-generated packages.
+Example stub result:
 
-## Legacy npm package
-
-Do **not** use `pi install npm:pi-extension-template` as the main onboarding path. That legacy [`pi-extension-template`](https://www.npmjs.com/package/pi-extension-template) npm package predates the scaffold CLI and is not maintained as the onboarding artifact. Use **`create-pi-extension`** to scaffold a new project instead. After you publish your own extension, install it with `pi install npm:YOUR_PACKAGE_NAME` as documented in that project's README.
+```json
+{
+  "ok": true,
+  "summary": {
+    "scanned": 1,
+    "ready": 1,
+    "errors": 0,
+    "warnings": 0,
+    "hints": 0
+  },
+  "findings": []
+}
+```
 
 ## Package contents
 
 | Path | Purpose |
 |---|---|
-| Repository root | Template source (not published to npm) |
-| `packages/create-pi-extension/` | Published scaffold CLI |
-| `scaffold/` | Generated-package README source synced into the bundled template |
-| `docs/` | Maintainer docs and template bootstrap guides |
+| `lib/lint.ts` | Shared read-only lint core |
+| `extensions/index.ts` | Pi tool and slash command registration |
 
 ## Development
 
@@ -86,36 +94,18 @@ npm install
 npm run ci
 ```
 
-`npm run ci` runs typecheck, `sync:template`, tests, `review:guardrails`, a `create-pi-extension` pack check, and template sync assertions.
-
-See [`CONTRIBUTING.md`](CONTRIBUTING.md) and [`docs/template-sync.md`](docs/template-sync.md).
-
 ## Release
 
-Releases publish **`create-pi-extension`** to npm through Trusted Publishing. The root template source is not published.
-
-See [`docs/release.md`](docs/release.md) for setup details.
-
-## Docs
-
-- [`docs/template-checklist.md`](docs/template-checklist.md) — Primary vs Secondary setup flows
-- [`docs/template-sync.md`](docs/template-sync.md) — refresh `packages/create-pi-extension/template/` before CLI publish
-- [`docs/template-sync-checklist.md`](docs/template-sync-checklist.md) — checklist for syncing and verifying the bundled template
-- [`docs/examples.md`](docs/examples.md) — extension, skill, prompt, and theme examples
-- [`docs/release.md`](docs/release.md) — Trusted Publishing and monorepo publish path
-- [`ROADMAP.md`](ROADMAP.md) — current status, priorities, and the maintenance seed backlog
+This package is pre-0.1.0. Publishing is human-owned after slice 06 release prep.
 
 ## Security
 
-Pi packages can execute code with your local permissions. Review extensions before installing third-party packages.
-
-For vulnerability reporting, see [`SECURITY.md`](SECURITY.md).
+This extension reads local files only. It does not call Multica APIs, mutate issues, or write files.
 
 ## Links
 
-- npm (`create-pi-extension`): https://www.npmjs.com/package/create-pi-extension
-- GitHub: https://github.com/eiei114/pi-extension-template
-- Issues: https://github.com/eiei114/pi-extension-template/issues
+- GitHub: https://github.com/eiei114/pi-local-issue-lint
+- Vault design docs: `4_Project/OSS/pi-local-issue-lint/` in the Obsidian vault
 
 ## License
 
