@@ -37,6 +37,32 @@ test("localIssueLint reports missing frontmatter and required fields", () => {
   }
 });
 
+test("localIssueLint rejects null and wrong-shaped required fields", () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "local-issue-lint-"));
+  const file = path.join(tmpDir, "invalid-fields.md");
+  fs.writeFileSync(file, "---\ntitle: null\nready_for_multica: \"true\"\nstatus: []\nproject_key: 42\n---\n");
+  try {
+    const result = localIssueLint({ target: file });
+    const fields = result.findings.filter((item) => item.code === "FRONTMATTER_FIELD_REQUIRED").map((item) => item.location.field);
+    assert.deepEqual(fields, ["title", "ready_for_multica", "status", "project_key"]);
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test("localIssueLint reports a duplicate marker on the first body line", () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "local-issue-lint-"));
+  const file = path.join(tmpDir, "duplicate-marker.md");
+  fs.writeFileSync(file, "---\ntitle: Example\nready_for_multica: true\nstatus: ready\nproject_key: demo\n---\n---\n");
+  try {
+    const result = localIssueLint({ target: file });
+    assert.equal(result.findings[0].code, "FRONTMATTER_DUPLICATE_MARKER");
+    assert.equal(result.findings[0].location.line, 7);
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
 test("localIssueLint reports missing required body sections", () => {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "local-issue-lint-"));
   const file = path.join(tmpDir, "sections.md");
@@ -45,6 +71,19 @@ test("localIssueLint reports missing required body sections", () => {
     const result = localIssueLint({ target: file });
     assert.equal(result.ok, false);
     assert.equal(result.findings.filter((item) => item.code === "BODY_SECTION_REQUIRED").length, 2);
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test("localIssueLint ignores headings inside fenced code blocks", () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "local-issue-lint-"));
+  const file = path.join(tmpDir, "fenced-sections.md");
+  fs.writeFileSync(file, "---\ntitle: Example\nready_for_multica: true\nstatus: ready\nproject_key: demo\n---\n```md\n## Parent\n## What to build\n## Acceptance criteria\n```\n");
+  try {
+    const result = localIssueLint({ target: file });
+    assert.equal(result.ok, false);
+    assert.equal(result.findings.filter((item) => item.code === "BODY_SECTION_REQUIRED").length, 3);
   } finally {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }
@@ -77,6 +116,20 @@ test("localIssueLint requires target", () => {
 
   assert.equal(result.ok, false);
   assert.equal(result.findings[0]?.code, "TARGET_REQUIRED");
+});
+
+test("localIssueLint keeps invalid status when findings are bounded to zero", () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "local-issue-lint-"));
+  const file = path.join(tmpDir, "invalid.md");
+  fs.writeFileSync(file, "---\ntitle: Example\nready_for_multica: true\nstatus: ready\n---\n## Parent\n## What to build\n## Acceptance criteria\n");
+  try {
+    const result = localIssueLint({ target: file, maxFindings: 0 });
+    assert.equal(result.ok, false);
+    assert.equal(result.findings.length, 0);
+    assert.equal(result.summary.errors, 1);
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
 });
 
 test("formatLintSummary renders readable stub output", () => {
