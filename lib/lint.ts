@@ -117,6 +117,7 @@ function dependencyFindings(records: IssueRecord[]): void {
     for (const target of record.unblocks) {
       const other = resolveDep(target);
       if (!other && isAmbiguous(target)) record.findings.push(ambiguousFinding(record, target, "unblocks"));
+      else if (!other) record.findings.push(finding(record.path, "DEPENDENCY_MISSING", `Dependency '${target}' was not found among scanned issues.`, "Use a filename stem or relative issue path that exists locally.", { field: "unblocks" }));
       else if (other && !other.blockedBy.some((dep) => resolveDep(dep) === record)) record.findings.push(finding(record.path, "DEPENDENCY_NON_RECIPROCAL", `unblocks '${target}' is not mirrored by blocked_by on that issue.`, "Add this issue to the target's blocked_by list.", { field: "unblocks" }, "warning"));
     }
     for (const dep of record.blockedBy) { const other = resolveDep(dep); if (other && !other.unblocks.some((target) => resolveDep(target) === record)) record.findings.push(finding(record.path, "DEPENDENCY_NON_RECIPROCAL", `blocked_by '${dep}' is not mirrored by unblocks on that issue.`, "Add the dependent issue to the dependency's unblocks list.", { field: "blocked_by" }, "warning")); }
@@ -126,7 +127,15 @@ function dependencyFindings(records: IssueRecord[]): void {
 export function localIssueLint(input: LocalIssueLintInput): LocalIssueLintResult {
   const target = input.target.trim(), root = input.projectRoot ? resolve(input.projectRoot) : process.cwd();
   if (!target) { const findings = boundedFindings([finding(target, "TARGET_REQUIRED", "target is required", "Pass a local issue markdown file path.")], input.maxFindings); return { ok: false, summary: summarize(findings, 0, 0), findings }; }
-  const paths = expandTarget(target, root); if (!paths.length) { const path = resolve(root, target); const findings = boundedFindings([finding(path, "TARGET_NOT_FOUND", "Target path does not exist.", "Check the file path and try again.")], input.maxFindings); return { ok: false, summary: summarize(findings, 0, 0), findings }; }
+  let paths: string[];
+  try { paths = expandTarget(target, root); }
+  catch (error) {
+    if (!(error instanceof SyntaxError)) throw error;
+    const path = resolve(root, target);
+    const findings = boundedFindings([finding(path, "TARGET_GLOB_INVALID", "Target glob is invalid.", "Correct the glob syntax and try again.")], input.maxFindings);
+    return { ok: false, summary: summarize(findings, 0, 0), findings };
+  }
+  if (!paths.length) { const path = resolve(root, target); const findings = boundedFindings([finding(path, "TARGET_NOT_FOUND", "Target path does not exist.", "Check the file path and try again.")], input.maxFindings); return { ok: false, summary: summarize(findings, 0, 0), findings }; }
   const records = paths.sort((a, b) => a.localeCompare(b)).map((path) => lintFile(path, root)); dependencyFindings(records);
   for (const record of records) record.ready = record.ready && record.findings.every((item) => item.severity !== "error");
   const allFindings = records.flatMap((record) => record.findings), findings = boundedFindings(allFindings, input.maxFindings), ready = records.filter((record) => record.ready).length;

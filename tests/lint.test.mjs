@@ -118,6 +118,19 @@ test("localIssueLint scans glob targets", () => {
   } finally { fs.rmSync(tmpDir, { recursive: true, force: true }); }
 });
 
+test("localIssueLint reports invalid glob syntax instead of throwing", () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "local-issue-lint-"));
+  fs.writeFileSync(path.join(tmpDir, "issue.md"), "# issue\n");
+  try {
+    const result = localIssueLint({ target: "[z-a].md", projectRoot: tmpDir });
+    assert.equal(result.ok, false);
+    assert.equal(result.summary.errors, 1);
+    assert.equal(result.findings[0]?.code, "TARGET_GLOB_INVALID");
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
 test("localIssueLint matches **/*.md at the root and nested levels", () => {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "local-issue-lint-"));
   const nestedDir = path.join(tmpDir, "nested");
@@ -164,6 +177,21 @@ test("localIssueLint reports ambiguous aliases and excludes dependency errors fr
     assert.equal(result.ok, false);
     assert.equal(result.summary.ready, 2);
     assert.ok(result.findings.some((item) => item.code === "DEPENDENCY_AMBIGUOUS"));
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test("localIssueLint reports missing unblocks targets and excludes them from ready count", () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "local-issue-lint-"));
+  const issue = "---\ntitle: Dependent\nready_for_multica: true\nstatus: ready\nproject_key: demo\nunblocks: missing\n---\n## Parent\n## What to build\n## Acceptance criteria\n";
+  fs.writeFileSync(path.join(tmpDir, "dependent.md"), issue);
+
+  try {
+    const result = localIssueLint({ target: tmpDir });
+    assert.equal(result.ok, false);
+    assert.equal(result.summary.ready, 0);
+    assert.ok(result.findings.some((item) => item.code === "DEPENDENCY_MISSING" && item.location.field === "unblocks"));
   } finally {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }
