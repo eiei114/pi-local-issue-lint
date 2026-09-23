@@ -118,6 +118,57 @@ test("localIssueLint scans glob targets", () => {
   } finally { fs.rmSync(tmpDir, { recursive: true, force: true }); }
 });
 
+test("localIssueLint matches **/*.md at the root and nested levels", () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "local-issue-lint-"));
+  const nestedDir = path.join(tmpDir, "nested");
+  fs.mkdirSync(nestedDir);
+  const issue = (title) => `---\ntitle: ${title}\nready_for_multica: true\nstatus: ready\nproject_key: demo\n---\n## Parent\n## What to build\n## Acceptance criteria\n`;
+  fs.writeFileSync(path.join(tmpDir, "root.md"), issue("Root"));
+  fs.writeFileSync(path.join(nestedDir, "nested.md"), issue("Nested"));
+
+  try {
+    const result = localIssueLint({ target: "**/*.md", projectRoot: tmpDir });
+    assert.equal(result.ok, true);
+    assert.equal(result.summary.scanned, 2);
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test("localIssueLint treats spaces and braces as literal path characters", () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "local-issue-lint-"));
+  const literalDir = path.join(tmpDir, "folder with {braces}");
+  fs.mkdirSync(literalDir);
+  fs.writeFileSync(path.join(literalDir, "issue.md"), "---\ntitle: Literal path\nready_for_multica: true\nstatus: ready\nproject_key: demo\n---\n## Parent\n## What to build\n## Acceptance criteria\n");
+
+  try {
+    const result = localIssueLint({ target: literalDir, projectRoot: tmpDir });
+    assert.equal(result.ok, true);
+    assert.equal(result.summary.scanned, 1);
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test("localIssueLint reports ambiguous aliases and excludes dependency errors from ready count", () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "local-issue-lint-"));
+  const issue = (title, dependencies = "") => `---\ntitle: ${title}\nready_for_multica: true\nstatus: ready\nproject_key: demo\n${dependencies}---\n## Parent\n## What to build\n## Acceptance criteria\n`;
+  fs.mkdirSync(path.join(tmpDir, "a"));
+  fs.mkdirSync(path.join(tmpDir, "b"));
+  fs.writeFileSync(path.join(tmpDir, "a", "setup.md"), issue("Setup A"));
+  fs.writeFileSync(path.join(tmpDir, "b", "setup.md"), issue("Setup B"));
+  fs.writeFileSync(path.join(tmpDir, "dependent.md"), issue("Dependent", "blocked_by:\n  - setup\n"));
+
+  try {
+    const result = localIssueLint({ target: tmpDir });
+    assert.equal(result.ok, false);
+    assert.equal(result.summary.ready, 2);
+    assert.ok(result.findings.some((item) => item.code === "DEPENDENCY_AMBIGUOUS"));
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
 test("localIssueLint requires target", () => {
   const result = localIssueLint({ target: "   " });
 

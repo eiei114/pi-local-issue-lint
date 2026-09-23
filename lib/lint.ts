@@ -52,11 +52,28 @@ function withoutFencedCodeBlocks(body: string): string { let fence: "`" | "~" | 
 function listValue(value: unknown): string[] { if (Array.isArray(value)) return value.filter((item): item is string => typeof item === "string" && item.trim() !== "").map((item) => item.trim()); return typeof value === "string" && value.trim() ? [value.trim()] : []; }
 function aliasesFor(path: string, root: string): string[] { const rel = relative(root, path).split(sep).join("/"); const noExt = rel.replace(/\.md$/i, ""); return [...new Set([noExt, basename(noExt), path.split(sep).join("/")])]; }
 function allMarkdownFiles(root: string): string[] { const result: string[] = []; const walk = (dir: string): void => { for (const entry of readdirSync(dir, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) { const path = resolve(dir, entry.name); if (entry.isDirectory()) walk(path); else if (entry.isFile() && extname(entry.name).toLowerCase() === ".md") result.push(path); } }; walk(root); return result; }
-function globRegex(pattern: string): RegExp { let out = "^"; for (let i = 0; i < pattern.length; i += 1) { const c = pattern[i]; if (c === "*") out += pattern[i + 1] === "*" ? (i += 1, ".*") : "[^/]*"; else if (c === "?") out += "[^/]"; else if (c === "[") { const end = pattern.indexOf("]", i + 1); if (end >= 0) { out += pattern.slice(i, end + 1); i = end; } else out += "\\["; } else out += c.replace(/[.+^${}()|\\]/g, "\\$&"); } return new RegExp(`${out}$`, "i"); }
+function globRegex(pattern: string): RegExp {
+  let out = "^";
+  for (let i = 0; i < pattern.length; i += 1) {
+    const c = pattern[i];
+    if (c === "*") {
+      if (pattern[i + 1] === "*") {
+        if (pattern[i + 2] === "/") { out += "(?:.*/)?"; i += 2; }
+        else { out += ".*"; i += 1; }
+      } else out += "[^/]*";
+    } else if (c === "?") out += "[^/]";
+    else if (c === "[") {
+      const end = pattern.indexOf("]", i + 1);
+      if (end >= 0) { out += pattern.slice(i, end + 1); i = end; }
+      else out += "\\[";
+    } else out += c.replace(/[.+^${}()|\\]/g, "\\$&");
+  }
+  return new RegExp(`${out}$`, "i");
+}
 function expandTarget(target: string, root: string): string[] {
-  if (/[ *?\[\]{}]/.test(target)) {
+  if (/[*?\[\]]/.test(target)) {
     const pattern = target.split(sep).join("/");
-    return allMarkdownFiles(root).filter((file) => globRegex(pattern).test(relative(root, file).split(sep).join("/") ) || globRegex(pattern).test(file.split(sep).join("/")));
+    return allMarkdownFiles(root).filter((file) => globRegex(pattern).test(relative(root, file).split(sep).join("/")) || globRegex(pattern).test(file.split(sep).join("/")));
   }
   const resolved = resolve(root, target); let stats; try { stats = statSync(resolved); } catch { return []; }
   if (stats.isDirectory()) return allMarkdownFiles(resolved);
@@ -74,11 +91,34 @@ function lintFile(path: string, root: string): IssueRecord {
   return { path, aliases, status, blockedBy: listValue(values.get("blocked_by")), unblocks: listValue(values.get("unblocks")), ready: importReady && findings.length === 0, findings };
 }
 function dependencyFindings(records: IssueRecord[]): void {
-  const byAlias = new Map<string, IssueRecord>(); for (const record of records) for (const alias of record.aliases) if (!byAlias.has(alias)) byAlias.set(alias, record);
-  const resolveDep = (value: string): IssueRecord | undefined => byAlias.get(value) ?? byAlias.get(value.replace(/\\/g, "/").replace(/\.md$/i, ""));
+  const byAlias = new Map<string, IssueRecord>(), ambiguousAliases = new Set<string>();
+  for (const record of records) for (const alias of record.aliases) {
+    const previous = byAlias.get(alias);
+    if (previous && previous !== record) { byAlias.delete(alias); ambiguousAliases.add(alias); }
+    else if (!ambiguousAliases.has(alias)) byAlias.set(alias, record);
+  }
+  const normalizeAlias = (value: string): string => value.replace(/\\/g, "/").replace(/\.md$/i, "");
+  const resolveDep = (value: string): IssueRecord | undefined => byAlias.get(value) ?? byAlias.get(normalizeAlias(value));
+  const isAmbiguous = (value: string): boolean => ambiguousAliases.has(value) || ambiguousAliases.has(normalizeAlias(value));
+  const ambiguousFinding = (record: IssueRecord, value: string, field: string): LocalIssueFinding => finding(
+    record.path,
+    "DEPENDENCY_AMBIGUOUS",
+    `Dependency '${value}' matches multiple scanned issues.`,
+    "Use a unique relative issue path to identify the dependency.",
+    { field },
+  );
   for (const record of records) {
-    for (const dep of record.blockedBy) if (!resolveDep(dep)) record.findings.push(finding(record.path, record.status === "blocked" ? "DEPENDENCY_MISSING_WARNING" : "DEPENDENCY_MISSING", `Dependency '${dep}' was not found among scanned issues.`, "Use a filename stem or relative issue path that exists locally.", { field: "blocked_by" }, record.status === "blocked" ? "warning" : "error"));
-    for (const target of record.unblocks) { const other = resolveDep(target); if (other && !other.blockedBy.some((dep) => resolveDep(dep) === record)) record.findings.push(finding(record.path, "DEPENDENCY_NON_RECIPROCAL", `unblocks '${target}' is not mirrored by blocked_by on that issue.`, "Add this issue to the target's blocked_by list.", { field: "unblocks" }, "warning")); }
+    for (const dep of record.blockedBy) {
+      if (!resolveDep(dep)) {
+        if (isAmbiguous(dep)) record.findings.push(ambiguousFinding(record, dep, "blocked_by"));
+        else record.findings.push(finding(record.path, record.status === "blocked" ? "DEPENDENCY_MISSING_WARNING" : "DEPENDENCY_MISSING", `Dependency '${dep}' was not found among scanned issues.`, "Use a filename stem or relative issue path that exists locally.", { field: "blocked_by" }, record.status === "blocked" ? "warning" : "error"));
+      }
+    }
+    for (const target of record.unblocks) {
+      const other = resolveDep(target);
+      if (!other && isAmbiguous(target)) record.findings.push(ambiguousFinding(record, target, "unblocks"));
+      else if (other && !other.blockedBy.some((dep) => resolveDep(dep) === record)) record.findings.push(finding(record.path, "DEPENDENCY_NON_RECIPROCAL", `unblocks '${target}' is not mirrored by blocked_by on that issue.`, "Add this issue to the target's blocked_by list.", { field: "unblocks" }, "warning"));
+    }
     for (const dep of record.blockedBy) { const other = resolveDep(dep); if (other && !other.unblocks.some((target) => resolveDep(target) === record)) record.findings.push(finding(record.path, "DEPENDENCY_NON_RECIPROCAL", `blocked_by '${dep}' is not mirrored by unblocks on that issue.`, "Add the dependent issue to the dependency's unblocks list.", { field: "blocked_by" }, "warning")); }
   }
   const state = new Map<IssueRecord, number>(), stack: IssueRecord[] = []; const visit = (record: IssueRecord): void => { if (state.get(record) === 1) { const start = stack.indexOf(record); const cycle = [...stack.slice(start), record].map((item) => basename(item.path, extname(item.path))).join(" -> "); record.findings.push(finding(record.path, "DEPENDENCY_CYCLE", `Dependency cycle detected: ${cycle}.`, "Remove one dependency edge so the local issue graph is acyclic.", { field: "blocked_by" })); return; } if (state.get(record) === 2) return; state.set(record, 1); stack.push(record); for (const dep of record.blockedBy) { const next = resolveDep(dep); if (next) visit(next); } stack.pop(); state.set(record, 2); }; for (const record of records) visit(record);
@@ -88,6 +128,7 @@ export function localIssueLint(input: LocalIssueLintInput): LocalIssueLintResult
   if (!target) { const findings = boundedFindings([finding(target, "TARGET_REQUIRED", "target is required", "Pass a local issue markdown file path.")], input.maxFindings); return { ok: false, summary: summarize(findings, 0, 0), findings }; }
   const paths = expandTarget(target, root); if (!paths.length) { const path = resolve(root, target); const findings = boundedFindings([finding(path, "TARGET_NOT_FOUND", "Target path does not exist.", "Check the file path and try again.")], input.maxFindings); return { ok: false, summary: summarize(findings, 0, 0), findings }; }
   const records = paths.sort((a, b) => a.localeCompare(b)).map((path) => lintFile(path, root)); dependencyFindings(records);
+  for (const record of records) record.ready = record.ready && record.findings.every((item) => item.severity !== "error");
   const allFindings = records.flatMap((record) => record.findings), findings = boundedFindings(allFindings, input.maxFindings), ready = records.filter((record) => record.ready).length;
   return { ok: allFindings.every((item) => item.severity !== "error"), summary: summarize(allFindings, records.length, ready), findings };
 }
