@@ -97,18 +97,25 @@ test("localIssueLint returns error when target is missing", () => {
   assert.equal(result.findings[0]?.code, "TARGET_NOT_FOUND");
 });
 
-test("localIssueLint warns for directory targets in walking skeleton", () => {
-  const result = localIssueLint({ target: "." });
-
-  assert.equal(result.ok, true);
-  assert.equal(result.findings[0]?.code, "STUB_DIRECTORY_UNSUPPORTED");
+test("localIssueLint scans directory targets", () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "local-issue-lint-"));
+  fs.writeFileSync(path.join(tmpDir, "a.md"), "---\ntitle: A\nready_for_multica: true\nstatus: ready\nproject_key: demo\n---\n## Parent\n## What to build\n## Acceptance criteria\n");
+  fs.writeFileSync(path.join(tmpDir, "b.md"), "---\ntitle: B\nready_for_multica: true\nstatus: ready\nproject_key: demo\n---\n## Parent\n## What to build\n## Acceptance criteria\n");
+  try {
+    const result = localIssueLint({ target: tmpDir });
+    assert.equal(result.ok, true);
+    assert.equal(result.summary.scanned, 2);
+  } finally { fs.rmSync(tmpDir, { recursive: true, force: true }); }
 });
 
-test("localIssueLint warns for glob targets in walking skeleton", () => {
-  const result = localIssueLint({ target: "Issues/*.md" });
-
-  assert.equal(result.ok, true);
-  assert.equal(result.findings[0]?.code, "STUB_GLOB_UNSUPPORTED");
+test("localIssueLint scans glob targets", () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "local-issue-lint-"));
+  fs.writeFileSync(path.join(tmpDir, "a.md"), "---\ntitle: A\nready_for_multica: true\nstatus: ready\nproject_key: demo\n---\n## Parent\n## What to build\n## Acceptance criteria\n");
+  try {
+    const result = localIssueLint({ target: "*.md", projectRoot: tmpDir });
+    assert.equal(result.ok, true);
+    assert.equal(result.summary.scanned, 1);
+  } finally { fs.rmSync(tmpDir, { recursive: true, force: true }); }
 });
 
 test("localIssueLint requires target", () => {
