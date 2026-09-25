@@ -1,6 +1,6 @@
 import { readFileSync, statSync } from "node:fs";
 import { resolve } from "node:path";
-import { parseDocument } from "yaml";
+import { LineCounter, parseDocument } from "yaml";
 
 export type LocalIssueSeverity = "error" | "warning" | "info";
 
@@ -80,17 +80,19 @@ function parseFrontmatter(text: string): { parsed?: ParsedFrontmatter; error?: {
     if ((lines[index] ?? "").trim() === "---") { close = index; break; }
   }
   if (close < 0) return { error: { code: "FRONTMATTER_UNTERMINATED", line: lines.length, message: "YAML frontmatter is not terminated.", hint: "Add a closing --- marker after the frontmatter fields." } };
-  // Include the first body line when looking for a stray marker.
-  for (let index = close + 1; index < lines.length; index += 1) {
-    if ((lines[index] ?? "").trim() === "---") {
-      return { error: { code: "FRONTMATTER_DUPLICATE_MARKER", line: index + 1, message: "Duplicate frontmatter marker found.", hint: "Use one frontmatter block at the beginning of the file." } };
-    }
+  // A stray marker can appear directly after frontmatter, ignoring blank lines.
+  let firstBody = close + 1;
+  while (firstBody < lines.length && (lines[firstBody] ?? "").trim() === "") firstBody += 1;
+  if ((lines[firstBody] ?? "").trim() === "---") {
+    return { error: { code: "FRONTMATTER_DUPLICATE_MARKER", line: firstBody + 1, message: "Duplicate frontmatter marker found.", hint: "Use one frontmatter block at the beginning of the file." } };
   }
-  const document = parseDocument(lines.slice(1, close).join("\n"), { prettyErrors: false });
+  const lineCounter = new LineCounter();
+  const document = parseDocument(lines.slice(1, close).join("\n"), { prettyErrors: false, lineCounter });
   if (document.errors.length > 0) {
     const error = document.errors[0];
     const duplicate = /unique|duplicat/i.test(error.message);
-    return { error: { code: duplicate ? "FRONTMATTER_DUPLICATE_FIELD" : "FRONTMATTER_INVALID", line: (error.linePos?.[0]?.line ?? 1) + 1, message: `Invalid YAML frontmatter: ${error.message}`, hint: "Fix the YAML syntax and keep each frontmatter field only once." } };
+    const line = lineCounter.linePos(error.pos[0]).line + 1;
+    return { error: { code: duplicate ? "FRONTMATTER_DUPLICATE_FIELD" : "FRONTMATTER_INVALID", line, message: `Invalid YAML frontmatter: ${error.message}`, hint: "Fix the YAML syntax and keep each frontmatter field only once." } };
   }
   const source = document.toJS();
   if (source === null || typeof source !== "object" || Array.isArray(source)) {
@@ -138,8 +140,11 @@ function lintFile(path: string): { findings: LocalIssueFinding[]; ready: boolean
   const findings: LocalIssueFinding[] = [];
   for (const field of REQUIRED_FIELDS) {
     const value = values.get(field);
-    if (!values.has(field) || (field === "ready_for_multica" ? typeof value !== "boolean" : typeof value !== "string" || value.trim() === "")) {
+    const expected = field === "ready_for_multica" ? "a boolean" : "a non-empty string";
+    if (!values.has(field)) {
       findings.push(finding(path, "FRONTMATTER_FIELD_REQUIRED", `Required frontmatter field '${field}' is missing.`, `Add '${field}' to the YAML frontmatter.`, { field }));
+    } else if (field === "ready_for_multica" ? typeof value !== "boolean" : typeof value !== "string" || value.trim() === "") {
+      findings.push(finding(path, "FRONTMATTER_FIELD_REQUIRED", `Required frontmatter field '${field}' must be ${expected}.`, `Set '${field}' to ${expected} in the YAML frontmatter.`, { field }));
     }
   }
   const ready = values.get("ready_for_multica") === true && values.get("status") === "ready";
