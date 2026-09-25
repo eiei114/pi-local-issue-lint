@@ -207,6 +207,19 @@ test("localIssueLint reports ambiguous aliases and excludes dependency errors fr
   }
 });
 
+test("localIssueLint resolves dependency aliases consistently", () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "local-issue-lint-"));
+  const issue = (title, dependencies = "") => `---\ntitle: ${title}\nready_for_multica: true\nstatus: ready\nproject_key: demo\n${dependencies}---\n## Parent\n## What to build\n## Acceptance criteria\n`;
+  fs.writeFileSync(path.join(tmpDir, "setup.md"), issue("Setup", "unblocks:\n  - dependent.md\n"));
+  fs.writeFileSync(path.join(tmpDir, "dependent.md"), issue("Dependent", "blocked_by:\n  - setup.md\n"));
+
+  try {
+    const result = localIssueLint({ target: tmpDir });
+    assert.equal(result.ok, true);
+    assert.equal(result.findings.length, 0);
+  } finally { fs.rmSync(tmpDir, { recursive: true, force: true }); }
+});
+
 test("localIssueLint requires target", () => {
   const result = localIssueLint({ target: "   " });
 

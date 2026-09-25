@@ -146,9 +146,11 @@ function dependencyFindings(records: IssueRecord[]): void {
     if (previous && previous !== record) { byAlias.delete(alias); ambiguousAliases.add(alias); }
     else if (!ambiguousAliases.has(alias)) byAlias.set(alias, record);
   }
-  const normalizeAlias = (value: string): string => value.replace(/\\/g, "/").replace(/\.md$/i, "");
-  const resolveDep = (value: string): IssueRecord | undefined => byAlias.get(value) ?? byAlias.get(normalizeAlias(value));
-  const isAmbiguous = (value: string): boolean => ambiguousAliases.has(value) || ambiguousAliases.has(normalizeAlias(value));
+  const lookupDependency = (value: string): { record?: IssueRecord; ambiguous: boolean } => {
+    const normalized = value.replace(/\\/g, "/").replace(/\.md$/i, "");
+    const record = byAlias.get(value) ?? byAlias.get(normalized);
+    return { record, ambiguous: !record && (ambiguousAliases.has(value) || ambiguousAliases.has(normalized)) };
+  };
   const ambiguousFinding = (record: IssueRecord, value: string, field: string): LocalIssueFinding => finding(
     record.path,
     "DEPENDENCY_AMBIGUOUS",
@@ -158,21 +160,23 @@ function dependencyFindings(records: IssueRecord[]): void {
   );
   for (const record of records) {
     for (const dep of record.blockedBy) {
-      if (!resolveDep(dep)) {
-        if (isAmbiguous(dep)) record.findings.push(ambiguousFinding(record, dep, "blocked_by"));
+      const lookup = lookupDependency(dep);
+      if (!lookup.record) {
+        if (lookup.ambiguous) record.findings.push(ambiguousFinding(record, dep, "blocked_by"));
         else record.findings.push(finding(record.path, record.status === "blocked" ? "DEPENDENCY_MISSING_WARNING" : "DEPENDENCY_MISSING", `Dependency '${dep}' was not found among scanned issues.`, "Use a filename stem or relative issue path that exists locally.", { field: "blocked_by" }, record.status === "blocked" ? "warning" : "error"));
       }
     }
     for (const target of record.unblocks) {
-      const other = resolveDep(target);
-      if (!other) record.findings.push(isAmbiguous(target)
+      const lookup = lookupDependency(target);
+      const other = lookup.record;
+      if (!other) record.findings.push(lookup.ambiguous
         ? ambiguousFinding(record, target, "unblocks")
         : finding(record.path, "DEPENDENCY_MISSING", `Dependency '${target}' was not found among scanned issues.`, "Use a filename stem or relative issue path that exists locally.", { field: "unblocks" }));
-      else if (!other.blockedBy.some((dep) => resolveDep(dep) === record)) record.findings.push(finding(record.path, "DEPENDENCY_NON_RECIPROCAL", `unblocks '${target}' is not mirrored by blocked_by on that issue.`, "Add this issue to the target's blocked_by list.", { field: "unblocks" }, "warning"));
+      else if (!other.blockedBy.some((dep) => lookupDependency(dep).record === record)) record.findings.push(finding(record.path, "DEPENDENCY_NON_RECIPROCAL", `unblocks '${target}' is not mirrored by blocked_by on that issue.`, "Add this issue to the target's blocked_by list.", { field: "unblocks" }, "warning"));
     }
-    for (const dep of record.blockedBy) { const other = resolveDep(dep); if (other && !other.unblocks.some((target) => resolveDep(target) === record)) record.findings.push(finding(record.path, "DEPENDENCY_NON_RECIPROCAL", `blocked_by '${dep}' is not mirrored by unblocks on that issue.`, "Add the dependent issue to the dependency's unblocks list.", { field: "blocked_by" }, "warning")); }
+    for (const dep of record.blockedBy) { const other = lookupDependency(dep).record; if (other && !other.unblocks.some((target) => lookupDependency(target).record === record)) record.findings.push(finding(record.path, "DEPENDENCY_NON_RECIPROCAL", `blocked_by '${dep}' is not mirrored by unblocks on that issue.`, "Add the dependent issue to the dependency's unblocks list.", { field: "blocked_by" }, "warning")); }
   }
-  const state = new Map<IssueRecord, number>(), stack: IssueRecord[] = []; const visit = (record: IssueRecord): void => { if (state.get(record) === 1) { const start = stack.indexOf(record); const cycle = [...stack.slice(start), record].map((item) => basename(item.path, extname(item.path))).join(" -> "); record.findings.push(finding(record.path, "DEPENDENCY_CYCLE", `Dependency cycle detected: ${cycle}.`, "Remove one dependency edge so the local issue graph is acyclic.", { field: "blocked_by" })); return; } if (state.get(record) === 2) return; state.set(record, 1); stack.push(record); for (const dep of record.blockedBy) { const next = resolveDep(dep); if (next) visit(next); } stack.pop(); state.set(record, 2); }; for (const record of records) visit(record);
+  const state = new Map<IssueRecord, number>(), stack: IssueRecord[] = []; const visit = (record: IssueRecord): void => { if (state.get(record) === 1) { const start = stack.indexOf(record); const cycle = [...stack.slice(start), record].map((item) => basename(item.path, extname(item.path))).join(" -> "); record.findings.push(finding(record.path, "DEPENDENCY_CYCLE", `Dependency cycle detected: ${cycle}.`, "Remove one dependency edge so the local issue graph is acyclic.", { field: "blocked_by" })); return; } if (state.get(record) === 2) return; state.set(record, 1); stack.push(record); for (const dep of record.blockedBy) { const next = lookupDependency(dep).record; if (next) visit(next); } stack.pop(); state.set(record, 2); }; for (const record of records) visit(record);
 }
 export function localIssueLint(input: LocalIssueLintInput): LocalIssueLintResult {
   const target = input.target.trim(), root = input.projectRoot ? resolve(input.projectRoot) : process.cwd();
