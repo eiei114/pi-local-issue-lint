@@ -1,5 +1,6 @@
 import { readdirSync, readFileSync, statSync } from "node:fs";
-import { basename, dirname, extname, relative, resolve, sep } from "node:path";
+import { basename, extname, relative, resolve, sep } from "node:path";
+import { LineCounter, parseDocument } from "yaml";
 
 export type LocalIssueSeverity = "error" | "warning" | "info";
 export type LocalIssueLintSummary = { scanned: number; ready: number; errors: number; warnings: number; hints: number };
@@ -20,34 +21,44 @@ function summarize(findings: LocalIssueFinding[], scanned: number, ready: number
   return { scanned, ready, errors, warnings, hints };
 }
 function boundedFindings(findings: LocalIssueFinding[], max: number | undefined): LocalIssueFinding[] { return max === undefined || max < 0 ? findings : findings.slice(0, max); }
-function scalar(value: string): unknown {
-  const trimmed = value.trim();
-  if (!trimmed) return "";
-  if ((trimmed.startsWith("\"") && trimmed.endsWith("\"")) || (trimmed.startsWith("'") && trimmed.endsWith("'"))) return trimmed.slice(1, -1);
-  if (trimmed === "true") return true; if (trimmed === "false") return false; if (trimmed === "null") return null;
-  if (/^-?\d+$/.test(trimmed)) return Number(trimmed);
-  if (trimmed.startsWith("[") && trimmed.endsWith("]")) return trimmed.slice(1, -1).split(",").map(scalar).filter((item) => item !== "");
-  return trimmed;
-}
+
 function parseFrontmatter(text: string): { parsed?: ParsedFrontmatter; error?: { code: string; line: number; message: string; hint: string } } {
   const lines = text.split(/\r?\n/);
-  if (lines[0]?.replace(/^\uFEFF/, "") !== "---") return { error: { code: "FRONTMATTER_MISSING", line: 1, message: "YAML frontmatter is missing.", hint: "Start the file with a line containing --- followed by the issue fields." } };
-  const values = new Map<string, unknown>(), fieldLines = new Map<string, number>(); let close = -1;
+  if (lines[0]?.replace(/^\uFEFF/, "") !== "---") {
+    return { error: { code: "FRONTMATTER_MISSING", line: 1, message: "YAML frontmatter is missing.", hint: "Start the file with a line containing --- followed by the issue fields." } };
+  }
+  let close = -1;
   for (let index = 1; index < lines.length; index += 1) {
-    const line = lines[index] ?? ""; if (line.trim() === "---") { close = index; break; } if (!line.trim() || line.trimStart().startsWith("#")) continue;
-    const match = /^(\s*)([A-Za-z0-9_-]+):(?:\s*(.*))?$/.exec(line); if (!match) continue;
-    const key = match[2]; if (values.has(key)) return { error: { code: "FRONTMATTER_DUPLICATE_FIELD", line: index + 1, message: `Frontmatter field '${key}' is duplicated.`, hint: "Keep each frontmatter field only once." } };
-    let value = match[3] ?? ""; const list: unknown[] = []; let next = index + 1;
-    while (next < lines.length && /^\s+-\s+/.test(lines[next] ?? "")) { list.push(scalar((lines[next] ?? "").replace(/^\s+-\s+/, ""))); next += 1; }
-    if (list.length) { value = ""; index = next - 1; } values.set(key, list.length ? list : scalar(value)); fieldLines.set(key, index + 1);
+    if ((lines[index] ?? "").trim() === "---") { close = index; break; }
   }
   if (close < 0) return { error: { code: "FRONTMATTER_UNTERMINATED", line: lines.length, message: "YAML frontmatter is not terminated.", hint: "Add a closing --- marker after the frontmatter fields." } };
-  const after = close + 1, duplicateOffset = lines.slice(after).findIndex((line) => line.trim() === "---");
-  if (duplicateOffset >= 0) return { error: { code: "FRONTMATTER_DUPLICATE_MARKER", line: after + duplicateOffset + 1, message: "Duplicate frontmatter marker found.", hint: "Use one frontmatter block at the beginning of the file." } };
+  let firstBody = close + 1;
+  while (firstBody < lines.length && (lines[firstBody] ?? "").trim() === "") firstBody += 1;
+  if ((lines[firstBody] ?? "").trim() === "---") {
+    return { error: { code: "FRONTMATTER_DUPLICATE_MARKER", line: firstBody + 1, message: "Duplicate frontmatter marker found.", hint: "Use one frontmatter block at the beginning of the file." } };
+  }
+  const lineCounter = new LineCounter();
+  const document = parseDocument(lines.slice(1, close).join("\n"), { prettyErrors: false, lineCounter });
+  if (document.errors.length > 0) {
+    const error = document.errors[0];
+    const duplicate = /unique|duplicat/i.test(error.message);
+    const line = lineCounter.linePos(error.pos[0]).line + 1;
+    return { error: { code: duplicate ? "FRONTMATTER_DUPLICATE_FIELD" : "FRONTMATTER_INVALID", line, message: `Invalid YAML frontmatter: ${error.message}`, hint: "Fix the YAML syntax and keep each frontmatter field only once." } };
+  }
+  const source = document.toJS();
+  if (source === null || typeof source !== "object" || Array.isArray(source)) {
+    return { error: { code: "FRONTMATTER_INVALID", line: 2, message: "YAML frontmatter must be a mapping of fields.", hint: "Use key-value fields inside the frontmatter block." } };
+  }
+  const values = new Map<string, unknown>(Object.entries(source));
+  const fieldLines = new Map<string, number>();
+  for (let index = 1; index < close; index += 1) {
+    const match = /^\s*([A-Za-z0-9_-]+):/.exec(lines[index] ?? "");
+    if (match && !fieldLines.has(match[1])) fieldLines.set(match[1], index + 1);
+  }
+  const after = close + 1;
   return { parsed: { values, lines: fieldLines, body: lines.slice(after).join("\n"), bodyStart: after + 1 } };
 }
 function finding(path: string, code: string, message: string, hint: string, location?: LocalIssueFinding["location"], severity: LocalIssueSeverity = "error"): LocalIssueFinding { return { severity, code, path, location, message, hint, docs_ref: DOCS_REF }; }
-function isValidRequiredField(field: string, value: unknown): boolean { return field === "ready_for_multica" ? typeof value === "boolean" : typeof value === "string" && value.trim() !== ""; }
 function withoutFencedCodeBlocks(body: string): string { let fence: "`" | "~" | null = null; return body.split(/\r?\n/).map((line) => { const marker = /^\s*(`{3,}|~{3,})/.exec(line)?.[1]; if (marker) { const type = marker[0] as "`" | "~"; if (fence === null) fence = type; else if (fence === type) fence = null; return ""; } return fence === null ? line : ""; }).join("\n"); }
 function listValue(value: unknown): string[] { if (Array.isArray(value)) return value.filter((item): item is string => typeof item === "string" && item.trim() !== "").map((item) => item.trim()); return typeof value === "string" && value.trim() ? [value.trim()] : []; }
 function aliasesFor(path: string, root: string): string[] { const rel = relative(root, path).split(sep).join("/"); const noExt = rel.replace(/\.md$/i, ""); return [...new Set([noExt, basename(noExt), path.split(sep).join("/")])]; }
@@ -113,7 +124,15 @@ function lintFile(path: string, root: string): IssueRecord {
   const aliases = aliasesFor(path, root); let text: string; try { text = readFileSync(path, "utf8"); } catch { return { path, aliases, status: "", blockedBy: [], unblocks: [], ready: false, findings: [finding(path, "TARGET_READ_FAILED", "Target file could not be read.", "Check file permissions and encoding.")] }; }
   const parsed = parseFrontmatter(text); if (!parsed.parsed) { const e = parsed.error!; return { path, aliases, status: "", blockedBy: [], unblocks: [], ready: false, findings: [finding(path, e.code, e.message, e.hint, { line: e.line })] }; }
   const { values, body, bodyStart } = parsed.parsed, findings: LocalIssueFinding[] = [];
-  for (const field of REQUIRED_FIELDS) if (!values.has(field) || !isValidRequiredField(field, values.get(field))) findings.push(finding(path, "FRONTMATTER_FIELD_REQUIRED", `Required frontmatter field '${field}' is missing.`, `Add '${field}' to the YAML frontmatter.`, { field }));
+  for (const field of REQUIRED_FIELDS) {
+    const value = values.get(field);
+    const expected = field === "ready_for_multica" ? "a boolean" : "a non-empty string";
+    if (!values.has(field)) {
+      findings.push(finding(path, "FRONTMATTER_FIELD_REQUIRED", `Required frontmatter field '${field}' is missing.`, `Add '${field}' to the YAML frontmatter.`, { field }));
+    } else if (field === "ready_for_multica" ? typeof value !== "boolean" : typeof value !== "string" || value.trim() === "") {
+      findings.push(finding(path, "FRONTMATTER_FIELD_REQUIRED", `Required frontmatter field '${field}' must be ${expected}.`, `Set '${field}' to ${expected} in the YAML frontmatter.`, { field }));
+    }
+  }
   const status = typeof values.get("status") === "string" ? values.get("status") as string : "";
   if (status && status !== "ready" && status !== "blocked") findings.push(finding(path, "STATUS_INVALID", `Status '${status}' is not importable.`, "Use status: ready or status: blocked.", { field: "status" }));
   const importReady = values.get("ready_for_multica") === true && status === "ready";
