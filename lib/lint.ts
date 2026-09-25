@@ -1,5 +1,6 @@
 import { readFileSync, statSync } from "node:fs";
 import { resolve } from "node:path";
+import { parseDocument } from "yaml";
 
 export type LocalIssueSeverity = "error" | "warning" | "info";
 
@@ -69,57 +70,54 @@ function boundedFindings(findings: LocalIssueFinding[], maxFindings: number | un
   return maxFindings === undefined || maxFindings < 0 ? findings : findings.slice(0, maxFindings);
 }
 
-function scalar(value: string): unknown {
-  const trimmed = value.trim();
-  if (trimmed === "") return "";
-  if ((trimmed.startsWith("\"") && trimmed.endsWith("\"")) || (trimmed.startsWith("'") && trimmed.endsWith("'"))) {
-    return trimmed.slice(1, -1);
-  }
-  if (trimmed === "true") return true;
-  if (trimmed === "false") return false;
-  if (trimmed === "null") return null;
-  if (/^-?\d+$/.test(trimmed)) return Number(trimmed);
-  if (trimmed.startsWith("[") && trimmed.endsWith("]")) {
-    return trimmed.slice(1, -1).split(",").map((item) => scalar(item)).filter((item) => item !== "");
-  }
-  return trimmed;
-}
-
 function parseFrontmatter(text: string): { parsed?: ParsedFrontmatter; error?: { code: string; line: number; message: string; hint: string } } {
   const lines = text.split(/\r?\n/);
   if (lines[0]?.replace(/^\uFEFF/, "") !== "---") {
     return { error: { code: "FRONTMATTER_MISSING", line: 1, message: "YAML frontmatter is missing.", hint: "Start the file with a line containing --- followed by the issue fields." } };
   }
-  const values = new Map<string, unknown>();
-  const fieldLines = new Map<string, number>();
   let close = -1;
   for (let index = 1; index < lines.length; index += 1) {
-    const line = lines[index] ?? "";
-    if (line.trim() === "---") { close = index; break; }
-    if (!line.trim() || line.trimStart().startsWith("#")) continue;
-    const match = /^(\s*)([A-Za-z0-9_-]+):(?:\s*(.*))?$/.exec(line);
-    if (!match) continue;
-    const key = match[2];
-    if (values.has(key)) {
-      return { error: { code: "FRONTMATTER_DUPLICATE_FIELD", line: index + 1, message: `Frontmatter field '${key}' is duplicated.`, hint: "Keep each frontmatter field only once." } };
-    }
-    let value = match[3] ?? "";
-    const list: unknown[] = [];
-    let next = index + 1;
-    while (next < lines.length && /^\s+-\s+/.test(lines[next] ?? "")) {
-      list.push(scalar((lines[next] ?? "").replace(/^\s+-\s+/, "")));
-      next += 1;
-    }
-    if (list.length > 0) { value = ""; index = next - 1; }
-    values.set(key, list.length > 0 ? list : scalar(value));
-    fieldLines.set(key, index + 1);
+    if ((lines[index] ?? "").trim() === "---") { close = index; break; }
   }
   if (close < 0) return { error: { code: "FRONTMATTER_UNTERMINATED", line: lines.length, message: "YAML frontmatter is not terminated.", hint: "Add a closing --- marker after the frontmatter fields." } };
-  const after = close + 1;
-  if (lines.slice(after + 1).some((line) => line.trim() === "---")) {
-    return { error: { code: "FRONTMATTER_DUPLICATE_MARKER", line: after + 1, message: "Duplicate frontmatter marker found.", hint: "Use one frontmatter block at the beginning of the file." } };
+  // Include the first body line when looking for a stray marker.
+  for (let index = close + 1; index < lines.length; index += 1) {
+    if ((lines[index] ?? "").trim() === "---") {
+      return { error: { code: "FRONTMATTER_DUPLICATE_MARKER", line: index + 1, message: "Duplicate frontmatter marker found.", hint: "Use one frontmatter block at the beginning of the file." } };
+    }
   }
+  const document = parseDocument(lines.slice(1, close).join("\n"), { prettyErrors: false });
+  if (document.errors.length > 0) {
+    const error = document.errors[0];
+    const duplicate = /unique|duplicat/i.test(error.message);
+    return { error: { code: duplicate ? "FRONTMATTER_DUPLICATE_FIELD" : "FRONTMATTER_INVALID", line: (error.linePos?.[0]?.line ?? 1) + 1, message: `Invalid YAML frontmatter: ${error.message}`, hint: "Fix the YAML syntax and keep each frontmatter field only once." } };
+  }
+  const source = document.toJS();
+  if (source === null || typeof source !== "object" || Array.isArray(source)) {
+    return { error: { code: "FRONTMATTER_INVALID", line: 2, message: "YAML frontmatter must be a mapping of fields.", hint: "Use key-value fields inside the frontmatter block." } };
+  }
+  const values = new Map<string, unknown>(Object.entries(source));
+  const fieldLines = new Map<string, number>();
+  for (let index = 1; index < close; index += 1) {
+    const match = /^\s*([A-Za-z0-9_-]+):/.exec(lines[index] ?? "");
+    if (match && !fieldLines.has(match[1])) fieldLines.set(match[1], index + 1);
+  }
+  const after = close + 1;
   return { parsed: { values, lines: fieldLines, body: lines.slice(after).join("\n"), bodyStart: after + 1 } };
+}
+
+function withoutFencedCodeBlocks(body: string): string {
+  let fence: "`" | "~" | null = null;
+  return body.split(/\r?\n/).map((line) => {
+    const marker = /^\s*(`{3,}|~{3,})/.exec(line)?.[1];
+    if (marker) {
+      const markerType = marker[0] as "`" | "~";
+      if (fence === null) fence = markerType;
+      else if (fence === markerType) fence = null;
+      return "";
+    }
+    return fence === null ? line : "";
+  }).join("\n");
 }
 
 function finding(path: string, code: string, message: string, hint: string, location?: LocalIssueFinding["location"]): LocalIssueFinding {
@@ -139,15 +137,17 @@ function lintFile(path: string): { findings: LocalIssueFinding[]; ready: boolean
   const { values, lines, body, bodyStart } = frontmatter.parsed;
   const findings: LocalIssueFinding[] = [];
   for (const field of REQUIRED_FIELDS) {
-    if (!values.has(field) || values.get(field) === "") {
+    const value = values.get(field);
+    if (!values.has(field) || (field === "ready_for_multica" ? typeof value !== "boolean" : typeof value !== "string" || value.trim() === "")) {
       findings.push(finding(path, "FRONTMATTER_FIELD_REQUIRED", `Required frontmatter field '${field}' is missing.`, `Add '${field}' to the YAML frontmatter.`, { field }));
     }
   }
   const ready = values.get("ready_for_multica") === true && values.get("status") === "ready";
   if (!ready) return { ready: false, findings };
+  const sectionBody = withoutFencedCodeBlocks(body);
   for (const section of REQUIRED_SECTIONS) {
     const sectionPattern = new RegExp(`^##\\s+${section.replace(/[.*+?^${}()|[\\]\\\\]/g, "\\$&")}\\s*$`, "mi");
-    if (!sectionPattern.test(body)) {
+    if (!sectionPattern.test(sectionBody)) {
       findings.push(finding(path, "BODY_SECTION_REQUIRED", `Required body section '${section}' is missing.`, `Add a '## ${section}' section to the issue body.`, { section, line: bodyStart }));
     }
   }
@@ -181,7 +181,7 @@ export function localIssueLint(input: LocalIssueLintInput): LocalIssueLintResult
   }
   const linted = lintFile(resolved);
   const findings = boundedFindings(linted.findings, input.maxFindings);
-  return { ok: findings.every((item) => item.severity !== "error"), summary: summarize(findings, 1, linted.ready && findings.length === 0 ? 1 : 0), findings };
+  return { ok: linted.findings.every((item) => item.severity !== "error"), summary: summarize(linted.findings, 1, linted.ready ? 1 : 0), findings };
 }
 
 export function formatLintSummary(result: LocalIssueLintResult, targetLabel?: string): string {
