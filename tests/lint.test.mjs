@@ -63,6 +63,44 @@ test("localIssueLint reports a duplicate marker on the first body line", () => {
   }
 });
 
+test("localIssueLint allows horizontal rules later in the body", () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "local-issue-lint-"));
+  const file = path.join(tmpDir, "horizontal-rule.md");
+  fs.writeFileSync(file, "---\ntitle: Example\nready_for_multica: true\nstatus: ready\nproject_key: demo\n---\n## Parent\n---\n## What to build\nImplement it.\n## Acceptance criteria\n- [ ] It works.\n");
+  try {
+    const result = localIssueLint({ target: file });
+    assert.equal(result.findings.some((item) => item.code === "FRONTMATTER_DUPLICATE_MARKER"), false);
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test("localIssueLint reports YAML syntax errors at the correct line", () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "local-issue-lint-"));
+  const file = path.join(tmpDir, "invalid-yaml.md");
+  fs.writeFileSync(file, "---\ntitle: Example\nready_for_multica: true\nstatus: ready\nproject_key: [\n---\n");
+  try {
+    const finding = localIssueLint({ target: file }).findings[0];
+    assert.equal(finding.code, "FRONTMATTER_INVALID");
+    assert.equal(finding.location.line, 5);
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test("localIssueLint distinguishes invalid required field values from missing fields", () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "local-issue-lint-"));
+  const file = path.join(tmpDir, "invalid-fields.md");
+  fs.writeFileSync(file, "---\ntitle: 42\nready_for_multica: true\nstatus: ready\n---\n");
+  try {
+    const result = localIssueLint({ target: file });
+    assert.ok(result.findings.some((item) => item.location.field === "title" && item.message.includes("must be a non-empty string")));
+    assert.ok(result.findings.some((item) => item.location.field === "project_key" && item.message.includes("is missing")));
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
 test("localIssueLint reports missing required body sections", () => {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "local-issue-lint-"));
   const file = path.join(tmpDir, "sections.md");
