@@ -241,6 +241,33 @@ test("localIssueLint keeps invalid status when findings are bounded to zero", ()
   }
 });
 
+test("localIssueLint validates dependency fields and marks every cycle member", () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "local-issue-lint-"));
+  const issue = (name, dependency) => `---\ntitle: ${name}\nready_for_multica: true\nstatus: ready\nproject_key: demo\nblocked_by:\n  - ${dependency}\nunblocks:\n  - ${dependency}\n---\n## Parent\n## What to build\n## Acceptance criteria\n`;
+  fs.writeFileSync(path.join(tmpDir, "a.md"), issue("A", "b"));
+  fs.writeFileSync(path.join(tmpDir, "b.md"), issue("B", "a"));
+  fs.writeFileSync(path.join(tmpDir, "invalid.md"), "---\ntitle: Invalid\nready_for_multica: true\nstatus: ready\nproject_key: demo\nblocked_by: nope\n---\n");
+  try {
+    const result = localIssueLint({ target: tmpDir });
+    assert.equal(result.ok, false);
+    assert.equal(result.summary.ready, 0);
+    assert.equal(result.findings.filter((item) => item.code === "DEPENDENCY_CYCLE").length, 2);
+    assert.ok(result.findings.some((item) => item.code === "DEPENDENCY_FIELD_INVALID"));
+  } finally { fs.rmSync(tmpDir, { recursive: true, force: true }); }
+});
+
+test("localIssueLint preserves case-sensitive glob matching and summary limits", () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "local-issue-lint-"));
+  const issue = "---\ntitle: Example\nready_for_multica: true\nstatus: ready\nproject_key: demo\n---\n## Parent\n## What to build\n## Acceptance criteria\n";
+  fs.writeFileSync(path.join(tmpDir, "Issue.md"), issue);
+  try {
+    const result = localIssueLint({ target: "issue*.md", projectRoot: tmpDir, maxFindings: 0 });
+    assert.equal(result.summary.scanned, 0);
+    assert.equal(result.findings.length, 0);
+    assert.equal(result.summary.errors, 1);
+  } finally { fs.rmSync(tmpDir, { recursive: true, force: true }); }
+});
+
 test("formatLintSummary renders readable stub output", () => {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "local-issue-lint-"));
   const issuePath = path.join(tmpDir, "sample-issue.md");
