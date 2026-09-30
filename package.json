@@ -1,6 +1,6 @@
 {
   "name": "pi-local-issue-lint",
-  "version": "0.0.0",
+  "version": "0.0.1",
   "description": "Read-only lint for Multica Local Markdown Issues before import",
   "type": "module",
   "license": "MIT",
@@ -53,10 +53,10 @@
     "protobufjs": ">=7.6.3 <8.0.0"
   },
   "devDependencies": {
-    "@earendil-works/pi-agent-core": "^0.84.4",
-    "@earendil-works/pi-ai": "^0.84.4",
-    "@earendil-works/pi-coding-agent": "^0.84.4",
-    "@earendil-works/pi-tui": "^0.84.4",
+    "@earendil-works/pi-agent-core": "^0.99.1",
+    "@earendil-works/pi-ai": "^0.99.1",
+    "@earendil-works/pi-coding-agent": "^0.99.1",
+    "@earendil-works/pi-tui": "^0.99.1",
     "@types/node": "^26.3.0",
     "typebox": "latest",
     "typescript": "^7.0.2"
