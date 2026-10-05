@@ -101,6 +101,21 @@ test("localIssueLint distinguishes invalid required field values from missing fi
   }
 });
 
+test("localIssueLint applies required field validation consistently to blank strings", () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "local-issue-lint-"));
+  const file = path.join(tmpDir, "blank-fields.md");
+  fs.writeFileSync(file, "---\ntitle: \"   \"\nready_for_multica: true\nstatus: \" \"\nproject_key: demo\n---\n");
+  try {
+    const result = localIssueLint({ target: file });
+    assert.deepEqual(
+      result.findings.filter((item) => item.code === "FRONTMATTER_FIELD_REQUIRED").map((item) => item.location.field),
+      ["title", "status"],
+    );
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
 test("localIssueLint reports missing required body sections", () => {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "local-issue-lint-"));
   const file = path.join(tmpDir, "sections.md");

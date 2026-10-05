@@ -69,6 +69,17 @@ function dependencyList(value: unknown, path: string, field: "blocked_by" | "unb
   }
   return listValue(value);
 }
+function validateRequiredFields(values: Map<string, unknown>, path: string, findings: LocalIssueFinding[]): void {
+  for (const field of REQUIRED_FIELDS) {
+    const value = values.get(field);
+    const expected = field === "ready_for_multica" ? "a boolean" : "a non-empty string";
+    if (!values.has(field)) {
+      findings.push(finding(path, "FRONTMATTER_FIELD_REQUIRED", `Required frontmatter field '${field}' is missing.`, `Add '${field}' to the YAML frontmatter.`, { field }));
+    } else if (field === "ready_for_multica" ? typeof value !== "boolean" : typeof value !== "string" || value.trim() === "") {
+      findings.push(finding(path, "FRONTMATTER_FIELD_REQUIRED", `Required frontmatter field '${field}' must be ${expected}.`, `Set '${field}' to ${expected} in the YAML frontmatter.`, { field }));
+    }
+  }
+}
 function aliasesFor(path: string, root: string): string[] { const rel = relative(root, path).split(sep).join("/"); const noExt = rel.replace(/\.md$/i, ""); return [...new Set([noExt, basename(noExt), path.split(sep).join("/")])]; }
 type Expansion = { paths: string[]; findings: LocalIssueFinding[] };
 function allMarkdownFiles(root: string, maxDepth = Number.POSITIVE_INFINITY): Expansion {
@@ -137,15 +148,7 @@ function lintFile(path: string, root: string): IssueRecord {
   const { values, body, bodyStart } = parsed.parsed, findings: LocalIssueFinding[] = [];
   const blockedBy = dependencyList(values.get("blocked_by"), path, "blocked_by", findings);
   const unblocks = dependencyList(values.get("unblocks"), path, "unblocks", findings);
-  for (const field of REQUIRED_FIELDS) {
-    const value = values.get(field);
-    const expected = field === "ready_for_multica" ? "a boolean" : "a non-empty string";
-    if (!values.has(field)) {
-      findings.push(finding(path, "FRONTMATTER_FIELD_REQUIRED", `Required frontmatter field '${field}' is missing.`, `Add '${field}' to the YAML frontmatter.`, { field }));
-    } else if (field === "ready_for_multica" ? typeof value !== "boolean" : typeof value !== "string" || value.trim() === "") {
-      findings.push(finding(path, "FRONTMATTER_FIELD_REQUIRED", `Required frontmatter field '${field}' must be ${expected}.`, `Set '${field}' to ${expected} in the YAML frontmatter.`, { field }));
-    }
-  }
+  validateRequiredFields(values, path, findings);
   const status = typeof values.get("status") === "string" ? values.get("status") as string : "";
   if (status && status !== "ready" && status !== "blocked") findings.push(finding(path, "STATUS_INVALID", `Status '${status}' is not importable.`, "Use status: ready or status: blocked.", { field: "status" }));
   const importReady = values.get("ready_for_multica") === true && status === "ready";
