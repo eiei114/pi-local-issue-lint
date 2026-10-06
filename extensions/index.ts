@@ -3,6 +3,7 @@ import { Text } from "@earendil-works/pi-tui";
 import { StringEnum } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
 import {
+  emptyLintResult,
   formatLintSummary,
   localIssueLint,
   type LocalIssueLintInput,
@@ -85,7 +86,7 @@ export default function (pi: ExtensionAPI) {
     parameters: localIssueLintParameters,
     async execute(_toolCallId, params, signal, _onUpdate, _ctx) {
       if (signal?.aborted) {
-        return { content: [{ type: "text", text: "Cancelled" }], details: emptyDetails() };
+        return { content: [{ type: "text", text: "Cancelled" }], details: emptyLintResult() };
       }
 
       const result = localIssueLint(params as LocalIssueLintInput);
@@ -113,12 +114,4 @@ export default function (pi: ExtensionAPI) {
       return new Text(text, 0, 0);
     },
   });
-}
-
-function emptyDetails(): LocalIssueLintResult {
-  return {
-    ok: true,
-    summary: { scanned: 0, ready: 0, errors: 0, warnings: 0, hints: 0 },
-    findings: [],
-  };
 }
