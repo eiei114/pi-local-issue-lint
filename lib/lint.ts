@@ -80,6 +80,54 @@ function validateRequiredFields(values: Map<string, unknown>, path: string, find
     }
   }
 }
+function fieldLocation(lines: Map<string, number>, field: string): LocalIssueFinding["location"] { return { field, line: lines.get(field) }; }
+function hasApprovalMarker(text: string): boolean {
+  return /(?:human|maintainer)[_ -]+(?:approval|approved)[_ -]*(?:granted|approved|confirmed)|(?<!not[_ -])explicitly[_ -]+approved\b|approved[_ -]+by[_ -]+(?:human|maintainer)|human[_ -]+approved\b/i.test(text);
+}
+function hasParallelRationale(body: string): boolean {
+  if (/\bparallel(?:[_ -]+\w+){0,3}[_ -]+(?:is[_ -]+)?(?:not|never|unsafe|uncertain|un[_ -]?guaranteed)\b|\b(?:not|never|cannot|can't)[ _-]+(?:\w+[ _-]+){0,3}parallel\b/i.test(body)) return false;
+  return /parallel[_ -]?safe|run[_ -]?in[_ -]?parallel(?:[_ -]+execution)?[_ -]+safe|parallel(?:ism)?\s+(?:is\s+)?safe|parallel[_ -]?safety\s+(?:is\s+)?(?:guaranteed|confirmed)|並列.*(?:安全|理由)/i.test(body);
+}
+function hasUsableMetadataValue(value: unknown): boolean {
+  return typeof value === "string" ? value.trim() !== "" : value !== undefined && value !== null;
+}
+function validatePolicy(values: Map<string, unknown>, lines: Map<string, number>, body: string, path: string, findings: LocalIssueFinding[]): void {
+  const add = (code: string, message: string, hint: string, field?: string, severity: LocalIssueSeverity = "error"): void => {
+    findings.push(finding(path, code, message, hint, fieldLocation(lines, field ?? ""), severity));
+  };
+  const prMode = values.get("pr_mode");
+  if (prMode !== undefined && (typeof prMode !== "string" || !["single", "stacked", "parallel"].includes(prMode))) {
+    add("PR_MODE_INVALID", `PR mode '${String(prMode)}' is invalid.`, "Use pr_mode: single, stacked, or parallel.", "pr_mode");
+  }
+  if (prMode === "stacked") {
+    if (values.get("stack_tool") !== "gh-stack") add("STACK_METADATA_REQUIRED", "Stacked PR mode requires stack_tool: gh-stack.", "Set stack_tool to gh-stack and include stack metadata for the stack.", "stack_tool");
+    const metadata = ["stack_id", "stack_base", "stack_parent", "stack_metadata"].some((field) => hasUsableMetadataValue(values.get(field)));
+    if (!metadata && !/stack(?:ed)?\s+(?:metadata|id|base|parent)\s*[:=]/i.test(body)) add("STACK_METADATA_REQUIRED", "Stacked PR mode is missing stack metadata.", "Declare stack metadata such as stack_id and stack_base in frontmatter or the issue body.", "pr_mode");
+  }
+  if (prMode === "parallel" && values.get("parallel_safe") !== true && !hasParallelRationale(body)) {
+    add("PARALLEL_SAFETY_REQUIRED", "Parallel PR mode requires parallel_safe: true or an explanatory safety note.", "Set parallel_safe: true or explain why parallel work is safe.", "parallel_safe");
+  }
+  const bumpRequired = values.get("version_bump_required");
+  const bumpType = values.get("version_bump_type");
+  if (bumpRequired !== undefined && typeof bumpRequired !== "boolean") add("VERSION_BUMP_FIELD_INVALID", "version_bump_required must be a boolean.", "Set version_bump_required to true or false.", "version_bump_required");
+  if (bumpType !== undefined && (typeof bumpType !== "string" || !["none", "patch", "minor", "major"].includes(bumpType))) add("VERSION_BUMP_TYPE_INVALID", "version_bump_type must be none, patch, minor, or major.", "Choose one of: none, patch, minor, major.", "version_bump_type");
+  if (bumpRequired === true && (bumpType === undefined || bumpType === "none")) add("VERSION_BUMP_TYPE_REQUIRED", "A required version bump cannot omit or use version_bump_type: none.", "Choose patch, minor, or major, and explain the reason.", "version_bump_type");
+  if (bumpRequired === false && typeof bumpType === "string" && bumpType !== "none") add("VERSION_BUMP_NOT_REQUIRED", "version_bump_type must be none when version_bump_required is false.", "Set version_bump_type: none or require the bump explicitly.", "version_bump_type");
+  if (bumpType === "major" && !hasApprovalMarker(body) && values.get("human_approval") !== true && values.get("human_approved") !== true) add("MAJOR_BUMP_APPROVAL_REQUIRED", "A major version bump requires an explicit human approval marker.", "Add an explicit human approval marker before requesting a major bump.", "version_bump_type");
+  const acceptanceHeading = /^##\s+Acceptance criteria\s*$/im.exec(body);
+  const acceptanceBody = acceptanceHeading ? body.slice((acceptanceHeading.index ?? 0) + acceptanceHeading[0].length) : "";
+  const nextHeading = /^##\s+/m.exec(acceptanceBody);
+  const acceptanceCriteria = acceptanceBody.slice(0, nextHeading?.index ?? acceptanceBody.length);
+  if (bumpRequired === true && (!/package\.json/i.test(acceptanceCriteria) || !/CHANGELOG\.md/i.test(acceptanceCriteria))) add("VERSION_BUMP_FILES_REQUIRED", "Version bump acceptance criteria must mention package.json and CHANGELOG.md.", "Mention both package.json and CHANGELOG.md in the acceptance criteria.", "version_bump_required");
+  const publishExpected = values.get("package_publish_expected");
+  if (publishExpected !== undefined && typeof publishExpected !== "boolean") add("PUBLISH_INTENT_INVALID", "package_publish_expected must be a boolean.", "Set package_publish_expected to true or false.", "package_publish_expected");
+  const protectedPatterns: Array<[RegExp, string]> = [[/npm\s+publish/i, "NPM_PUBLISH_BOUNDARY"], [/\bOTP\b|one[- ]time password/i, "OTP_BOUNDARY"], [/\b(?:secret|secrets|token|credentials?)\b/i, "SECRETS_BOUNDARY"], [/\bproduction\s+(?:mutation|change|deploy|release)|mutat(?:e|ing)\s+production/i, "PRODUCTION_BOUNDARY"], [/\b(?:destructive|delete|destroy|drop)\s+(?:operation|action|data|resource)/i, "DESTRUCTIVE_OPERATION_BOUNDARY"], [/\bpermission\s+grant(?:s|ed|ing)?|grant(?:s|ed|ing)?\s+permission/i, "PERMISSION_GRANT_BOUNDARY"]];
+  for (const [pattern, code] of protectedPatterns) if (pattern.test(body)) {
+    const allowed = publishExpected === true && code === "NPM_PUBLISH_BOUNDARY";
+    const message = allowed ? "Package publish intent is explicit; human-controlled publish remains a protected boundary." : "Protected operation prose conflicts with the issue's declared policy boundary.";
+    add(code, message, "Keep this lint read-only and state the required human approval or boundary explicitly.", undefined, allowed ? "warning" : "error");
+  }
+}
 function aliasesFor(path: string, root: string): string[] { const rel = relative(root, path).split(sep).join("/"); const noExt = rel.replace(/\.md$/i, ""); return [...new Set([noExt, basename(noExt), path.split(sep).join("/")])]; }
 type Expansion = { paths: string[]; findings: LocalIssueFinding[] };
 function allMarkdownFiles(root: string, maxDepth = Number.POSITIVE_INFINITY): Expansion {
@@ -145,15 +193,16 @@ function expandTarget(target: string, root: string): Expansion {
 function lintFile(path: string, root: string): IssueRecord {
   const aliases = aliasesFor(path, root); let text: string; try { text = readFileSync(path, "utf8"); } catch { return { path, aliases, status: "", blockedBy: [], unblocks: [], ready: false, findings: [finding(path, "TARGET_READ_FAILED", "Target file could not be read.", "Check file permissions and encoding.")] }; }
   const parsed = parseFrontmatter(text); if (!parsed.parsed) { const e = parsed.error!; return { path, aliases, status: "", blockedBy: [], unblocks: [], ready: false, findings: [finding(path, e.code, e.message, e.hint, { line: e.line })] }; }
-  const { values, body, bodyStart } = parsed.parsed, findings: LocalIssueFinding[] = [];
+  const { values, lines, body, bodyStart } = parsed.parsed, findings: LocalIssueFinding[] = [];
   const blockedBy = dependencyList(values.get("blocked_by"), path, "blocked_by", findings);
   const unblocks = dependencyList(values.get("unblocks"), path, "unblocks", findings);
   validateRequiredFields(values, path, findings);
   const status = typeof values.get("status") === "string" ? values.get("status") as string : "";
   if (status && status !== "ready" && status !== "blocked") findings.push(finding(path, "STATUS_INVALID", `Status '${status}' is not importable.`, "Use status: ready or status: blocked.", { field: "status" }));
+  validatePolicy(values, lines, body, path, findings);
   const importReady = values.get("ready_for_multica") === true && status === "ready";
   if (importReady) { const sectionBody = withoutFencedCodeBlocks(body); for (const section of REQUIRED_SECTIONS) { const pattern = new RegExp(`^##\\s+${section.replace(/[.*+?^${}()|[\\]\\\\]/g, "\\$&")}\\s*$`, "mi"); if (!pattern.test(sectionBody)) findings.push(finding(path, "BODY_SECTION_REQUIRED", `Required body section '${section}' is missing.`, `Add a '## ${section}' section to the issue body.`, { section, line: bodyStart })); } }
-  return { path, aliases, status, blockedBy, unblocks, ready: importReady && findings.length === 0, findings };
+  return { path, aliases, status, blockedBy, unblocks, ready: importReady && findings.every((item) => item.severity !== "error"), findings };
 }
 function dependencyFindings(records: IssueRecord[]): void {
   const byAlias = new Map<string, IssueRecord>(), ambiguousAliases = new Set<string>();
