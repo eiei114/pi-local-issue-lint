@@ -283,6 +283,41 @@ test("localIssueLint preserves case-sensitive glob matching and summary limits",
   } finally { fs.rmSync(tmpDir, { recursive: true, force: true }); }
 });
 
+test("localIssueLint validates PR mode and version policy", () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "local-issue-lint-"));
+  const file = path.join(tmpDir, "policy.md");
+  fs.writeFileSync(file, `---\ntitle: Policy\nready_for_multica: true\nstatus: ready\nproject_key: demo\npr_mode: invalid\nversion_bump_required: true\nversion_bump_type: none\n---\n## Parent\n## What to build\n## Acceptance criteria\n`);
+  try {
+    const result = localIssueLint({ target: file });
+    assert.ok(result.findings.some((item) => item.code === "PR_MODE_INVALID"));
+    assert.ok(result.findings.some((item) => item.code === "VERSION_BUMP_TYPE_REQUIRED"));
+    assert.ok(result.findings.some((item) => item.code === "VERSION_BUMP_FILES_REQUIRED"));
+  } finally { fs.rmSync(tmpDir, { recursive: true, force: true }); }
+});
+
+test("localIssueLint requires stacked metadata and parallel safety", () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "local-issue-lint-"));
+  const issue = (mode) => `---\ntitle: ${mode}\nready_for_multica: true\nstatus: ready\nproject_key: demo\npr_mode: ${mode}\n---\n## Parent\n## What to build\n## Acceptance criteria\n`;
+  fs.writeFileSync(path.join(tmpDir, "stacked.md"), issue("stacked"));
+  fs.writeFileSync(path.join(tmpDir, "parallel.md"), issue("parallel"));
+  try {
+    const result = localIssueLint({ target: tmpDir });
+    assert.ok(result.findings.some((item) => item.code === "STACK_METADATA_REQUIRED"));
+    assert.ok(result.findings.some((item) => item.code === "PARALLEL_SAFETY_REQUIRED"));
+  } finally { fs.rmSync(tmpDir, { recursive: true, force: true }); }
+});
+
+test("localIssueLint flags protected operation prose", () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "local-issue-lint-"));
+  const file = path.join(tmpDir, "boundary.md");
+  fs.writeFileSync(file, `---\ntitle: Boundary\nready_for_multica: true\nstatus: ready\nproject_key: demo\n---\n## Parent\n## What to build\nRun npm publish after obtaining an OTP.\n## Acceptance criteria\n`);
+  try {
+    const result = localIssueLint({ target: file });
+    assert.ok(result.findings.some((item) => item.code === "NPM_PUBLISH_BOUNDARY"));
+    assert.ok(result.findings.some((item) => item.code === "OTP_BOUNDARY"));
+  } finally { fs.rmSync(tmpDir, { recursive: true, force: true }); }
+});
+
 test("formatLintSummary renders readable stub output", () => {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "local-issue-lint-"));
   const issuePath = path.join(tmpDir, "sample-issue.md");
