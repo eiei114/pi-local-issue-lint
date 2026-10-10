@@ -318,6 +318,36 @@ test("localIssueLint flags protected operation prose", () => {
   } finally { fs.rmSync(tmpDir, { recursive: true, force: true }); }
 });
 
+test("localIssueLint rejects non-affirmative approval and unsafe parallel rationale", () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "local-issue-lint-"));
+  const major = path.join(tmpDir, "major.md");
+  const parallel = path.join(tmpDir, "parallel.md");
+  const base = "---\ntitle: Example\nready_for_multica: true\nstatus: ready\nproject_key: demo\n";
+  fs.writeFileSync(major, `${base}version_bump_required: true\nversion_bump_type: major\n---\nHuman approval required.\n## Acceptance criteria\npackage.json and CHANGELOG.md\n`);
+  fs.writeFileSync(parallel, `${base}pr_mode: parallel\n---\nParallel safety is not guaranteed.\n`);
+  try {
+    assert.ok(localIssueLint({ target: major }).findings.some((item) => item.code === "MAJOR_BUMP_APPROVAL_REQUIRED"));
+    assert.ok(localIssueLint({ target: parallel }).findings.some((item) => item.code === "PARALLEL_SAFETY_REQUIRED"));
+  } finally { fs.rmSync(tmpDir, { recursive: true, force: true }); }
+});
+
+test("localIssueLint validates usable metadata, bump type, acceptance criteria, and warnings", () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "local-issue-lint-"));
+  const missing = path.join(tmpDir, "missing.md");
+  const publish = path.join(tmpDir, "publish.md");
+  const base = "---\ntitle: Example\nready_for_multica: true\nstatus: ready\nproject_key: demo\n";
+  fs.writeFileSync(missing, `${base}pr_mode: stacked\nstack_tool: gh-stack\nstack_id: null\nversion_bump_required: true\n---\n## Acceptance criteria\npackage.json and CHANGELOG.md\n`);
+  fs.writeFileSync(publish, `${base}package_publish_expected: true\n---\n## Parent\n## What to build\nRun npm publish.\n## Acceptance criteria\n`);
+  try {
+    const missingResult = localIssueLint({ target: missing });
+    assert.ok(missingResult.findings.some((item) => item.code === "STACK_METADATA_REQUIRED"));
+    assert.ok(missingResult.findings.some((item) => item.code === "VERSION_BUMP_TYPE_REQUIRED"));
+    const publishResult = localIssueLint({ target: publish });
+    assert.equal(publishResult.ok, true);
+    assert.equal(publishResult.summary.ready, 1);
+  } finally { fs.rmSync(tmpDir, { recursive: true, force: true }); }
+});
+
 test("formatLintSummary renders readable stub output", () => {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "local-issue-lint-"));
   const issuePath = path.join(tmpDir, "sample-issue.md");
