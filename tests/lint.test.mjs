@@ -358,6 +358,36 @@ test("localIssueLint accepts affirmative parallel rationale", () => {
   } finally { fs.rmSync(tmpDir, { recursive: true, force: true }); }
 });
 
+test("localIssueLint rejects Japanese negated or uncertain parallel safety", () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "local-issue-lint-"));
+  const file = path.join(tmpDir, "parallel.md");
+  const base = "---\ntitle: Example\nready_for_multica: true\nstatus: ready\nproject_key: demo\npr_mode: parallel\n";
+  try {
+    for (const metadata of ["", "parallel_safe: false\n"]) {
+      for (const body of ["並列処理が安全ではない", "並列処理は安全ではありません。", "並列作業は安全でない。",
+        "並列処理は安全じゃない。", "並列処理が安全とは言えない。", "並列の安全性は保証されていない。",
+        "並列処理の安全性は未確認です。", "並列処理の理由は不明です。", "並列処理は危険です。"]) {
+        fs.writeFileSync(file, `${base}${metadata}---\n${body}\n`);
+        const result = localIssueLint({ target: file });
+        assert.ok(result.findings.some((item) => item.code === "PARALLEL_SAFETY_REQUIRED"), `${metadata || "missing flag"}: ${body}`);
+      }
+    }
+  } finally { fs.rmSync(tmpDir, { recursive: true, force: true }); }
+});
+
+test("localIssueLint preserves affirmative Japanese rationale and explicit flag policy", () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "local-issue-lint-"));
+  const file = path.join(tmpDir, "parallel.md");
+  const base = "---\ntitle: Example\nready_for_multica: true\nstatus: ready\nproject_key: demo\npr_mode: parallel\n";
+  try {
+    for (const [metadata, body] of [["", "並列処理が安全な理由: 独立したファイルだけを変更する。"],
+      ["parallel_safe: true\n", "並列処理が安全ではない"]]) {
+      fs.writeFileSync(file, `${base}${metadata}---\n${body}\n`);
+      assert.equal(localIssueLint({ target: file }).findings.some((item) => item.code === "PARALLEL_SAFETY_REQUIRED"), false);
+    }
+  } finally { fs.rmSync(tmpDir, { recursive: true, force: true }); }
+});
+
 test("localIssueLint ignores fenced acceptance examples when checking required bump files", () => {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "local-issue-lint-"));
   const file = path.join(tmpDir, "version.md");

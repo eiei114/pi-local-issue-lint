@@ -86,6 +86,9 @@ function hasApprovalMarker(text: string): boolean {
 }
 function hasParallelRationale(body: string): boolean {
   if (/\bparallel(?:[_ -]+\w+){0,3}[_ -]+(?:is[_ -]+)?(?:not|never|unsafe|uncertain|un[_ -]?guaranteed)\b|\b(?:not|never|cannot|can't)[ _-]+(?:\w+[ _-]+){0,3}parallel\b/i.test(body)) return false;
+  // Check Japanese negation/uncertainty before the broad affirmative matcher.
+  // Stay within a sentence so a later unrelated note cannot invert a rationale.
+  if (/並列[^。！？\r\n]*(?:危険|安全(?:ではない|ではありません|でない|じゃない|とは言えない)|(?:安全(?:性)?|理由)[^。！？\r\n]*(?:保証されていない|保証できない|確認できていない|未確認|不明))/.test(body)) return false;
   return /parallel[_ -]?safe|run[_ -]?in[_ -]?parallel(?:[_ -]+execution)?[_ -]+safe|parallel(?:ism)?\s+(?:is\s+)?safe|parallel work is safe because|parallel[_ -]?safety\s+(?:is\s+)?(?:guaranteed|confirmed)|並列.*(?:安全|理由)/i.test(body);
 }
 function hasUsableMetadataValue(value: unknown): boolean {
