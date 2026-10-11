@@ -348,6 +348,26 @@ test("localIssueLint validates usable metadata, bump type, acceptance criteria, 
   } finally { fs.rmSync(tmpDir, { recursive: true, force: true }); }
 });
 
+test("localIssueLint accepts affirmative parallel rationale", () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "local-issue-lint-"));
+  const file = path.join(tmpDir, "parallel.md");
+  fs.writeFileSync(file, "---\ntitle: Example\nready_for_multica: true\nstatus: ready\nproject_key: demo\npr_mode: parallel\n---\nParallel work is safe because changes touch independent files.\n");
+  try {
+    const result = localIssueLint({ target: file });
+    assert.equal(result.findings.some((item) => item.code === "PARALLEL_SAFETY_REQUIRED"), false);
+  } finally { fs.rmSync(tmpDir, { recursive: true, force: true }); }
+});
+
+test("localIssueLint ignores fenced acceptance examples when checking required bump files", () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "local-issue-lint-"));
+  const file = path.join(tmpDir, "version.md");
+  fs.writeFileSync(file, "---\ntitle: Example\nready_for_multica: true\nstatus: ready\nproject_key: demo\nversion_bump_required: true\nversion_bump_type: patch\n---\n~~~md\n## Acceptance criteria\nThis example omits both required files.\n~~~\n\n## Acceptance criteria\npackage.json and CHANGELOG.md\n");
+  try {
+    const result = localIssueLint({ target: file });
+    assert.equal(result.findings.some((item) => item.code === "VERSION_BUMP_FILES_REQUIRED"), false);
+  } finally { fs.rmSync(tmpDir, { recursive: true, force: true }); }
+});
+
 test("formatLintSummary renders readable stub output", () => {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "local-issue-lint-"));
   const issuePath = path.join(tmpDir, "sample-issue.md");

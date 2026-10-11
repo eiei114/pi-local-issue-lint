@@ -86,7 +86,7 @@ function hasApprovalMarker(text: string): boolean {
 }
 function hasParallelRationale(body: string): boolean {
   if (/\bparallel(?:[_ -]+\w+){0,3}[_ -]+(?:is[_ -]+)?(?:not|never|unsafe|uncertain|un[_ -]?guaranteed)\b|\b(?:not|never|cannot|can't)[ _-]+(?:\w+[ _-]+){0,3}parallel\b/i.test(body)) return false;
-  return /parallel[_ -]?safe|run[_ -]?in[_ -]?parallel(?:[_ -]+execution)?[_ -]+safe|parallel(?:ism)?\s+(?:is\s+)?safe|parallel[_ -]?safety\s+(?:is\s+)?(?:guaranteed|confirmed)|並列.*(?:安全|理由)/i.test(body);
+  return /parallel[_ -]?safe|run[_ -]?in[_ -]?parallel(?:[_ -]+execution)?[_ -]+safe|parallel(?:ism)?\s+(?:is\s+)?safe|parallel work is safe because|parallel[_ -]?safety\s+(?:is\s+)?(?:guaranteed|confirmed)|並列.*(?:安全|理由)/i.test(body);
 }
 function hasUsableMetadataValue(value: unknown): boolean {
   return typeof value === "string" ? value.trim() !== "" : value !== undefined && value !== null;
@@ -114,8 +114,9 @@ function validatePolicy(values: Map<string, unknown>, lines: Map<string, number>
   if (bumpRequired === true && (bumpType === undefined || bumpType === "none")) add("VERSION_BUMP_TYPE_REQUIRED", "A required version bump cannot omit or use version_bump_type: none.", "Choose patch, minor, or major, and explain the reason.", "version_bump_type");
   if (bumpRequired === false && typeof bumpType === "string" && bumpType !== "none") add("VERSION_BUMP_NOT_REQUIRED", "version_bump_type must be none when version_bump_required is false.", "Set version_bump_type: none or require the bump explicitly.", "version_bump_type");
   if (bumpType === "major" && !hasApprovalMarker(body) && values.get("human_approval") !== true && values.get("human_approved") !== true) add("MAJOR_BUMP_APPROVAL_REQUIRED", "A major version bump requires an explicit human approval marker.", "Add an explicit human approval marker before requesting a major bump.", "version_bump_type");
-  const acceptanceHeading = /^##\s+Acceptance criteria\s*$/im.exec(body);
-  const acceptanceBody = acceptanceHeading ? body.slice((acceptanceHeading.index ?? 0) + acceptanceHeading[0].length) : "";
+  const policyBody = withoutFencedCodeBlocks(body);
+  const acceptanceHeading = /^##\s+Acceptance criteria\s*$/im.exec(policyBody);
+  const acceptanceBody = acceptanceHeading ? policyBody.slice((acceptanceHeading.index ?? 0) + acceptanceHeading[0].length) : "";
   const nextHeading = /^##\s+/m.exec(acceptanceBody);
   const acceptanceCriteria = acceptanceBody.slice(0, nextHeading?.index ?? acceptanceBody.length);
   if (bumpRequired === true && (!/package\.json/i.test(acceptanceCriteria) || !/CHANGELOG\.md/i.test(acceptanceCriteria))) add("VERSION_BUMP_FILES_REQUIRED", "Version bump acceptance criteria must mention package.json and CHANGELOG.md.", "Mention both package.json and CHANGELOG.md in the acceptance criteria.", "version_bump_required");
