@@ -283,6 +283,121 @@ test("localIssueLint preserves case-sensitive glob matching and summary limits",
   } finally { fs.rmSync(tmpDir, { recursive: true, force: true }); }
 });
 
+test("localIssueLint validates PR mode and version policy", () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "local-issue-lint-"));
+  const file = path.join(tmpDir, "policy.md");
+  fs.writeFileSync(file, `---\ntitle: Policy\nready_for_multica: true\nstatus: ready\nproject_key: demo\npr_mode: invalid\nversion_bump_required: true\nversion_bump_type: none\n---\n## Parent\n## What to build\n## Acceptance criteria\n`);
+  try {
+    const result = localIssueLint({ target: file });
+    assert.ok(result.findings.some((item) => item.code === "PR_MODE_INVALID"));
+    assert.ok(result.findings.some((item) => item.code === "VERSION_BUMP_TYPE_REQUIRED"));
+    assert.ok(result.findings.some((item) => item.code === "VERSION_BUMP_FILES_REQUIRED"));
+  } finally { fs.rmSync(tmpDir, { recursive: true, force: true }); }
+});
+
+test("localIssueLint requires stacked metadata and parallel safety", () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "local-issue-lint-"));
+  const issue = (mode) => `---\ntitle: ${mode}\nready_for_multica: true\nstatus: ready\nproject_key: demo\npr_mode: ${mode}\n---\n## Parent\n## What to build\n## Acceptance criteria\n`;
+  fs.writeFileSync(path.join(tmpDir, "stacked.md"), issue("stacked"));
+  fs.writeFileSync(path.join(tmpDir, "parallel.md"), issue("parallel"));
+  try {
+    const result = localIssueLint({ target: tmpDir });
+    assert.ok(result.findings.some((item) => item.code === "STACK_METADATA_REQUIRED"));
+    assert.ok(result.findings.some((item) => item.code === "PARALLEL_SAFETY_REQUIRED"));
+  } finally { fs.rmSync(tmpDir, { recursive: true, force: true }); }
+});
+
+test("localIssueLint flags protected operation prose", () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "local-issue-lint-"));
+  const file = path.join(tmpDir, "boundary.md");
+  fs.writeFileSync(file, `---\ntitle: Boundary\nready_for_multica: true\nstatus: ready\nproject_key: demo\n---\n## Parent\n## What to build\nRun npm publish after obtaining an OTP.\n## Acceptance criteria\n`);
+  try {
+    const result = localIssueLint({ target: file });
+    assert.ok(result.findings.some((item) => item.code === "NPM_PUBLISH_BOUNDARY"));
+    assert.ok(result.findings.some((item) => item.code === "OTP_BOUNDARY"));
+  } finally { fs.rmSync(tmpDir, { recursive: true, force: true }); }
+});
+
+test("localIssueLint rejects non-affirmative approval and unsafe parallel rationale", () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "local-issue-lint-"));
+  const major = path.join(tmpDir, "major.md");
+  const parallel = path.join(tmpDir, "parallel.md");
+  const base = "---\ntitle: Example\nready_for_multica: true\nstatus: ready\nproject_key: demo\n";
+  fs.writeFileSync(major, `${base}version_bump_required: true\nversion_bump_type: major\n---\nHuman approval required.\n## Acceptance criteria\npackage.json and CHANGELOG.md\n`);
+  fs.writeFileSync(parallel, `${base}pr_mode: parallel\n---\nParallel safety is not guaranteed.\n`);
+  try {
+    assert.ok(localIssueLint({ target: major }).findings.some((item) => item.code === "MAJOR_BUMP_APPROVAL_REQUIRED"));
+    assert.ok(localIssueLint({ target: parallel }).findings.some((item) => item.code === "PARALLEL_SAFETY_REQUIRED"));
+  } finally { fs.rmSync(tmpDir, { recursive: true, force: true }); }
+});
+
+test("localIssueLint validates usable metadata, bump type, acceptance criteria, and warnings", () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "local-issue-lint-"));
+  const missing = path.join(tmpDir, "missing.md");
+  const publish = path.join(tmpDir, "publish.md");
+  const base = "---\ntitle: Example\nready_for_multica: true\nstatus: ready\nproject_key: demo\n";
+  fs.writeFileSync(missing, `${base}pr_mode: stacked\nstack_tool: gh-stack\nstack_id: null\nversion_bump_required: true\n---\n## Acceptance criteria\npackage.json and CHANGELOG.md\n`);
+  fs.writeFileSync(publish, `${base}package_publish_expected: true\n---\n## Parent\n## What to build\nRun npm publish.\n## Acceptance criteria\n`);
+  try {
+    const missingResult = localIssueLint({ target: missing });
+    assert.ok(missingResult.findings.some((item) => item.code === "STACK_METADATA_REQUIRED"));
+    assert.ok(missingResult.findings.some((item) => item.code === "VERSION_BUMP_TYPE_REQUIRED"));
+    const publishResult = localIssueLint({ target: publish });
+    assert.equal(publishResult.ok, true);
+    assert.equal(publishResult.summary.ready, 1);
+  } finally { fs.rmSync(tmpDir, { recursive: true, force: true }); }
+});
+
+test("localIssueLint accepts affirmative parallel rationale", () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "local-issue-lint-"));
+  const file = path.join(tmpDir, "parallel.md");
+  fs.writeFileSync(file, "---\ntitle: Example\nready_for_multica: true\nstatus: ready\nproject_key: demo\npr_mode: parallel\n---\nParallel work is safe because changes touch independent files.\n");
+  try {
+    const result = localIssueLint({ target: file });
+    assert.equal(result.findings.some((item) => item.code === "PARALLEL_SAFETY_REQUIRED"), false);
+  } finally { fs.rmSync(tmpDir, { recursive: true, force: true }); }
+});
+
+test("localIssueLint rejects Japanese negated or uncertain parallel safety", () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "local-issue-lint-"));
+  const file = path.join(tmpDir, "parallel.md");
+  const base = "---\ntitle: Example\nready_for_multica: true\nstatus: ready\nproject_key: demo\npr_mode: parallel\n";
+  try {
+    for (const metadata of ["", "parallel_safe: false\n"]) {
+      for (const body of ["並列処理が安全ではない", "並列処理は安全ではありません。", "並列作業は安全でない。",
+        "並列処理は安全じゃない。", "並列処理が安全とは言えない。", "並列の安全性は保証されていない。",
+        "並列処理の安全性は未確認です。", "並列処理の理由は不明です。", "並列処理は危険です。"]) {
+        fs.writeFileSync(file, `${base}${metadata}---\n${body}\n`);
+        const result = localIssueLint({ target: file });
+        assert.ok(result.findings.some((item) => item.code === "PARALLEL_SAFETY_REQUIRED"), `${metadata || "missing flag"}: ${body}`);
+      }
+    }
+  } finally { fs.rmSync(tmpDir, { recursive: true, force: true }); }
+});
+
+test("localIssueLint preserves affirmative Japanese rationale and explicit flag policy", () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "local-issue-lint-"));
+  const file = path.join(tmpDir, "parallel.md");
+  const base = "---\ntitle: Example\nready_for_multica: true\nstatus: ready\nproject_key: demo\npr_mode: parallel\n";
+  try {
+    for (const [metadata, body] of [["", "並列処理が安全な理由: 独立したファイルだけを変更する。"],
+      ["parallel_safe: true\n", "並列処理が安全ではない"]]) {
+      fs.writeFileSync(file, `${base}${metadata}---\n${body}\n`);
+      assert.equal(localIssueLint({ target: file }).findings.some((item) => item.code === "PARALLEL_SAFETY_REQUIRED"), false);
+    }
+  } finally { fs.rmSync(tmpDir, { recursive: true, force: true }); }
+});
+
+test("localIssueLint ignores fenced acceptance examples when checking required bump files", () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "local-issue-lint-"));
+  const file = path.join(tmpDir, "version.md");
+  fs.writeFileSync(file, "---\ntitle: Example\nready_for_multica: true\nstatus: ready\nproject_key: demo\nversion_bump_required: true\nversion_bump_type: patch\n---\n~~~md\n## Acceptance criteria\nThis example omits both required files.\n~~~\n\n## Acceptance criteria\npackage.json and CHANGELOG.md\n");
+  try {
+    const result = localIssueLint({ target: file });
+    assert.equal(result.findings.some((item) => item.code === "VERSION_BUMP_FILES_REQUIRED"), false);
+  } finally { fs.rmSync(tmpDir, { recursive: true, force: true }); }
+});
+
 test("formatLintSummary renders readable stub output", () => {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "local-issue-lint-"));
   const issuePath = path.join(tmpDir, "sample-issue.md");
