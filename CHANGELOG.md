@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## [0.1.1] - 2026-10-13
+
+### Changed
+
+- Document npm and Git installation, Pi tool/command usage, the JSON result contract, human hints, and read-only limitations.
+- Add a human-owned first-publish handoff; no package publication is performed by this release-prep change.
+
 ## [0.1.0] - 2026-10-12
 
 ### Added

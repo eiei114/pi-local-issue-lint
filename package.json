@@ -1,6 +1,6 @@
 {
   "name": "pi-local-issue-lint",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Read-only lint for Multica Local Markdown Issues before import",
   "type": "module",
   "license": "MIT",

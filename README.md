@@ -19,7 +19,21 @@
 - Stable JSON contract: `ok`, `summary`, `findings`; human output groups concise hints by file and severity
 - Read-only: no import, no Multica mutation, no auto-fix
 
-## Install (local dogfood)
+## Install
+
+After the human-owned npm publish, install the package with Pi:
+
+```bash
+pi install npm:pi-local-issue-lint
+```
+
+The npm package is not published yet. Until the maintainer completes the publish handoff, install the current source from GitHub:
+
+```bash
+pi install git:github.com/eiei114/pi-local-issue-lint
+```
+
+For local development or dogfooding from a clone:
 
 From a clone of this repository:
 
@@ -28,19 +42,13 @@ npm install
 pi -e .
 ```
 
-From GitHub without publishing:
-
-```bash
-pi install git:github.com/eiei114/pi-local-issue-lint
-```
-
-Install into the current project instead of user Pi settings:
+Use `-l` to install the GitHub source into the current project instead of user Pi settings:
 
 ```bash
 pi install git:github.com/eiei114/pi-local-issue-lint -l
 ```
 
-## Quick start
+## Human command
 
 Run the human command from a project or vault folder (or pass a target explicitly):
 
@@ -55,9 +63,11 @@ For example, lint the authoring folders used by the OSS import workflow and Incu
 /local-issue-lint:check "4_Project/Incubator/Stage B"
 ```
 
-The command detects the target's project folder and checks an ancestor `managed-projects.md` when present. Unregistered project keys and disabled import mappings are warnings; local lint remains usable without a registry or Multica auth.
+The command prints a concise, human-readable summary. It detects the target's project folder and checks an ancestor `managed-projects.md` when present. Unknown project keys and disabled import mappings are warnings; lint still works without a registry or Multica authentication.
 
-Agents can call the tool directly:
+## Pi tool and JSON output
+
+Pi agents can call the `local_issue_lint` tool with a file, directory, or glob target. For example, ask Pi to lint the folder with:
 
 ```json
 {
@@ -65,7 +75,7 @@ Agents can call the tool directly:
 }
 ```
 
-Example result:
+The tool returns the complete JSON result (unlike the shorter human command output):
 
 ```json
 {
@@ -80,6 +90,8 @@ Example result:
   "findings": []
 }
 ```
+
+`ok` is false when at least one error finding exists. Each finding includes a severity, stable code, path, message, actionable hint, and a canonical documentation reference; `location` is included when available. Summary counts cover all findings even when an optional `maxFindings` limit truncates the returned list.
 
 ## Examples
 
@@ -142,11 +154,19 @@ npm run ci
 
 ## Release
 
-The package version is 0.1.0 and remains unpublished. Publishing is human-owned after slice 06 release prep.
+The package remains unpublished until the maintainer completes `PUBLISH_HANDOFF.md`. Publishing and any registry authentication or OTP challenge are human-owned.
 
 ## Security
 
-This extension reads local files only. It does not call Multica APIs, mutate issues, or write files.
+This extension reads local Markdown files and an optional ancestor `managed-projects.md` only. It does not call Multica APIs, mutate issues, or write/auto-fix files. No Multica credentials are required.
+
+## Limitations
+
+- This is an import-readiness lint, not a validator for every Markdown convention. It checks dependencies only among the files selected by the target and recognizes `ready`, `blocked`, and `draft` as import statuses; historical issues marked `done` are reported as non-importable.
+- Registry lookup is optional and local. It does not confirm live project state or resolve Multica issue IDs.
+- The human command limits displayed findings to ten; use the tool for the complete JSON result.
+- Protected-operation checks are intentionally conservative keyword checks. Policy documentation that discusses publishing, OTP, secrets, or other guarded operations may also produce findings; review the surrounding text before treating one as an actionable violation.
+- The tool does not edit issues, run imports, publish packages, or replace human review of findings.
 
 ## Links
 
