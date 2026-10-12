@@ -12,11 +12,11 @@ import {
 
 const localIssueLintParameters = Type.Object({
   target: Type.String({
-    description: "Local issue markdown file, directory, or glob target.",
+    description: "Local issue markdown file, draft, project directory, or glob target.",
   }),
   projectRoot: Type.Optional(
     Type.String({
-      description: "Project or vault root used to resolve relative targets.",
+      description: "Project or vault root used to resolve relative targets; otherwise inferred from cwd and target.",
     }),
   ),
   policyPreset: Type.Optional(
@@ -26,7 +26,7 @@ const localIssueLintParameters = Type.Object({
   ),
   includeDrafts: Type.Optional(
     Type.Boolean({
-      description: "Include draft issues when scanning directories (stub only in slice 01).",
+      description: "Include draft issues when scanning directories (default true).",
     }),
   ),
   maxFindings: Type.Optional(
@@ -44,10 +44,10 @@ const localIssueLintParameters = Type.Object({
 
 export default function (pi: ExtensionAPI) {
   pi.registerCommand("local-issue-lint:check", {
-    description: "Run read-only local issue lint and print a stub summary",
-    handler: async (_args, ctx) => {
-      let target: string | undefined;
-      if (ctx.hasUI) {
+    description: "Run read-only local issue lint and print a concise summary",
+    handler: async (args, ctx) => {
+      let target: string | undefined = args.trim();
+      if (!target && ctx.hasUI) {
         target = await ctx.ui.input("Issue file path (leave blank to cancel):", "");
         if (target === undefined) {
           return;
@@ -77,11 +77,11 @@ export default function (pi: ExtensionAPI) {
   pi.registerTool({
     name: "local_issue_lint",
     label: "Local Issue Lint",
-    description: "Read-only lint for Multica Local Markdown Issue files (walking skeleton stub).",
-    promptSnippet: "local_issue_lint: lint a local issue markdown file before Multica import",
+    description: "Read-only lint for Multica Local Markdown Issue files and project folders.",
+    promptSnippet: "local_issue_lint: lint local issue files and draft project folders before Multica import",
     promptGuidelines: [
       "Use local_issue_lint before import when validating Local Markdown Issue authoring.",
-      "This slice only implements single-file stub behavior; directory and glob targets return stub warnings.",
+      "Use a project folder or glob to check dependencies across its issues; registry hints are optional and read-only.",
     ],
     parameters: localIssueLintParameters,
     async execute(_toolCallId, params, signal, _onUpdate, _ctx) {
