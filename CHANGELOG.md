@@ -10,6 +10,11 @@
 - Lint draft and unregistered issue folders, with concise findings grouped by file and severity.
 - Document OSS import and Incubator Stage B authoring examples.
 
+### Fixed
+
+- Keep registry lookup scoped to the target and preserve directory-read errors when excluding drafts.
+- Prioritize errors in concise summaries and require explicit manual confirmation before release.
+
 ## [0.0.1] - 2026-09-30
 
 ### Changed

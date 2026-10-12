@@ -1,5 +1,5 @@
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
-import { basename, dirname, extname, join, relative, resolve, sep } from "node:path";
+import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { LineCounter, parseDocument } from "yaml";
 
 export type LocalIssueSeverity = "error" | "warning" | "info";
@@ -159,7 +159,12 @@ function discoverProjectRoot(target: string, cwd: string): string {
   return candidate;
 }
 function findManagedProjects(target: string, cwd: string, projectRoot: string): string | undefined {
-  const starts = [...new Set([projectRoot, targetSearchDirectory(target, cwd), cwd])];
+  const targetDirectory = targetSearchDirectory(target, cwd);
+  const cwdRelativeToTarget = relative(cwd, targetDirectory);
+  const cwdIsAncestor = !isAbsolute(cwdRelativeToTarget)
+    && cwdRelativeToTarget !== ".."
+    && !cwdRelativeToTarget.startsWith(`..${sep}`);
+  const starts = [...new Set([projectRoot, targetDirectory, ...(cwdIsAncestor ? [cwd] : [])])];
   for (const start of starts) {
     let current = start;
     while (true) {
@@ -361,9 +366,12 @@ export function localIssueLint(input: LocalIssueLintInput): LocalIssueLintResult
   }
   const paths = input.includeDrafts === false ? expansion.paths.filter((path) => !isDraftIssue(path)) : expansion.paths;
   if (!paths.length) {
-    const allFindings = [finding(resolve(root, target), "DRAFTS_EXCLUDED", "Only draft issues matched the target, and includeDrafts is false.", "Set includeDrafts: true to lint draft issues.", undefined, "info")];
+    const allFindings = [
+      ...expansion.findings,
+      finding(resolve(root, target), "DRAFTS_EXCLUDED", "Only draft issues matched the target, and includeDrafts is false.", "Set includeDrafts: true to lint draft issues.", undefined, "info"),
+    ];
     const findings = boundedFindings(allFindings, input.maxFindings);
-    return { ok: true, summary: summarize(allFindings, 0, 0), findings };
+    return { ok: allFindings.every((item) => item.severity !== "error"), summary: summarize(allFindings, 0, 0), findings };
   }
   const records = paths.sort((a, b) => a.localeCompare(b)).map((path) => lintFile(path, projectRoot));
   dependencyFindings(records);
@@ -376,8 +384,8 @@ export function formatLintSummary(result: LocalIssueLintResult, targetLabel?: st
   const lines = ["Local Issue Lint", targetLabel ? `Target: ${humanPath(targetLabel)}` : undefined, `Scanned: ${result.summary.scanned} | Ready: ${result.summary.ready} | Errors: ${result.summary.errors} | Warnings: ${result.summary.warnings} | Hints: ${result.summary.hints}`, result.ok ? "OK" : "FAILED"].filter((line): line is string => line !== undefined);
   if (result.findings.length) {
     const severityOrder: LocalIssueSeverity[] = ["error", "warning", "info"];
-    const ordered = [...result.findings].sort((a, b) => a.path.localeCompare(b.path) || severityOrder.indexOf(a.severity) - severityOrder.indexOf(b.severity) || a.code.localeCompare(b.code));
-    const visible = ordered.slice(0, 10);
+    const ordered = [...result.findings].sort((a, b) => severityOrder.indexOf(a.severity) - severityOrder.indexOf(b.severity) || a.path.localeCompare(b.path) || a.code.localeCompare(b.code));
+    const visible = ordered.slice(0, 10).sort((a, b) => a.path.localeCompare(b.path) || severityOrder.indexOf(a.severity) - severityOrder.indexOf(b.severity) || a.code.localeCompare(b.code));
     const byPath = new Map<string, LocalIssueFinding[]>();
     for (const item of visible) byPath.set(item.path, [...(byPath.get(item.path) ?? []), item]);
     lines.push("", "Findings:");
@@ -393,7 +401,7 @@ export function formatLintSummary(result: LocalIssueLintResult, targetLabel?: st
         }
       }
     }
-    if (ordered.length > visible.length) lines.push(`- … ${ordered.length - visible.length} more findings omitted; use JSON output for the full list.`);
+    if (result.findings.length > visible.length) lines.push(`- … ${result.findings.length - visible.length} more findings omitted; use JSON output for the full list.`);
   }
   return lines.join("\n");
 }

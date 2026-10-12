@@ -1,10 +1,13 @@
 name: Auto Release
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - package.json
+  workflow_dispatch:
+    inputs:
+      confirm_release:
+        description: Explicitly confirm creating a GitHub release and triggering npm publish.
+        type: boolean
+        required: true
+        default: false
 
 permissions:
   actions: write
@@ -13,6 +16,7 @@ permissions:
 jobs:
   release:
     name: Create release for new version
+    if: inputs.confirm_release == true
     runs-on: ubuntu-latest
     steps:
       - name: Checkout

@@ -484,3 +484,83 @@ test("localIssueLint remains usable without managed-projects.md and can exclude 
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }
 });
+
+test("localIssueLint ignores a cwd registry unrelated to an external target", () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "local-issue-lint-"));
+  const cwd = path.join(tmpDir, "cwd");
+  const outsideIssues = path.join(tmpDir, "outside", "project", "Issues");
+  fs.mkdirSync(cwd, { recursive: true });
+  fs.mkdirSync(outsideIssues, { recursive: true });
+  fs.writeFileSync(path.join(cwd, "managed-projects.md"), "| project_key | Local Issue Import mapping |\n| --- | --- |\n| cwd-project | enabled |\n");
+  fs.writeFileSync(path.join(outsideIssues, "ready.md"), "---\ntitle: External\nready_for_multica: true\nstatus: ready\nproject_key: outside-project\n---\n## Parent\n## What to build\nImplement it.\n## Acceptance criteria\n- [ ] It works.\n");
+  const previousCwd = process.cwd();
+
+  try {
+    process.chdir(cwd);
+    const result = localIssueLint({ target: path.join(outsideIssues, "ready.md") });
+    assert.equal(result.ok, true);
+    assert.equal(result.findings.some((item) => item.code === "PROJECT_KEY_UNKNOWN"), false);
+  } finally {
+    process.chdir(previousCwd);
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test("localIssueLint reports unreadable directories when all matched issues are excluded drafts", (t) => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "local-issue-lint-"));
+  const issues = path.join(tmpDir, "issues");
+  const unreadable = path.join(issues, "unreadable");
+  fs.mkdirSync(unreadable, { recursive: true });
+  fs.writeFileSync(path.join(issues, "draft.md"), "---\ntitle: Draft\nready_for_multica: false\nstatus: draft\nproject_key: local-only\n---\n");
+  let permissionsChanged = false;
+
+  try {
+    try {
+      fs.chmodSync(unreadable, 0);
+      permissionsChanged = true;
+    } catch {
+      t.skip("The platform does not allow changing directory permissions for this test.");
+      return;
+    }
+
+    let readDenied = false;
+    try {
+      fs.readdirSync(unreadable);
+    } catch (error) {
+      if (error.code !== "EACCES" && error.code !== "EPERM") throw error;
+      readDenied = true;
+    }
+    if (!readDenied) {
+      t.skip("The current user can still read directories with mode 000.");
+      return;
+    }
+
+    const result = localIssueLint({ target: issues, includeDrafts: false, maxFindings: 1 });
+    assert.equal(result.ok, false);
+    assert.equal(result.summary.errors, 1);
+    assert.equal(result.findings[0]?.code, "TARGET_READ_FAILED");
+  } finally {
+    if (permissionsChanged) fs.chmodSync(unreadable, 0o700);
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test("formatLintSummary keeps later errors inside the ten-finding limit", () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "local-issue-lint-"));
+  const issue = "---\ntitle: Draft\nready_for_multica: false\nstatus: draft\nproject_key: local-only\n---\n";
+  for (let index = 0; index < 10; index += 1) {
+    fs.writeFileSync(path.join(tmpDir, `a-${String(index).padStart(2, "0")}-draft.md`), issue);
+  }
+  fs.writeFileSync(path.join(tmpDir, "z-error.md"), "not an issue file\n");
+
+  try {
+    const result = localIssueLint({ target: tmpDir });
+    const summary = formatLintSummary(result);
+    assert.equal(result.ok, false);
+    assert.match(summary, /FAILED/);
+    assert.match(summary, /FRONTMATTER_MISSING/);
+    assert.match(summary, /1 more findings omitted/);
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
