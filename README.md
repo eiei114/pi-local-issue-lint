@@ -94,6 +94,8 @@ npm install
 npm run ci
 ```
 
+`npm run ci` includes `npm run smoke:pi`, which starts the locally pinned Pi 1.1.0 host and executes this extension's lint tool. The smoke uses a deterministic offline provider (no paid inference) while keeping Pi's extension loading, tool execution, error handling, second-process cleanup, and native-shell version check real.
+
 ## Release
 
 This package is pre-0.1.0. Publishing is human-owned after slice 06 release prep.

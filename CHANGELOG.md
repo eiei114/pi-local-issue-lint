@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+### Changed
+
+- Pin the Pi SDK development dependencies to 1.1.0 and verify the extension against the real Pi host.
+- Bump the package patch version to 0.0.2.
+
 ## [0.0.1] - 2026-09-30
 
 ### Changed
