@@ -1,5 +1,5 @@
-import { readdirSync, readFileSync, statSync } from "node:fs";
-import { basename, extname, relative, resolve, sep } from "node:path";
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { LineCounter, parseDocument } from "yaml";
 
 export type LocalIssueSeverity = "error" | "warning" | "info";
@@ -13,7 +13,7 @@ const DOCS_REF = "local-issue-import-format-v1";
 const REQUIRED_FIELDS = ["title", "ready_for_multica", "status", "project_key"];
 const REQUIRED_SECTIONS = ["Parent", "What to build", "Acceptance criteria"];
 type ParsedFrontmatter = { values: Map<string, unknown>; lines: Map<string, number>; body: string; bodyStart: number };
-type IssueRecord = { path: string; aliases: string[]; status: string; blockedBy: string[]; unblocks: string[]; findings: LocalIssueFinding[]; ready: boolean };
+type IssueRecord = { path: string; aliases: string[]; status: string; projectKey?: string; blockedBy: string[]; unblocks: string[]; findings: LocalIssueFinding[]; ready: boolean };
 
 function summarize(findings: LocalIssueFinding[], scanned: number, ready: number): LocalIssueLintSummary {
   let errors = 0, warnings = 0, hints = 0;
@@ -58,7 +58,7 @@ function parseFrontmatter(text: string): { parsed?: ParsedFrontmatter; error?: {
   const after = close + 1;
   return { parsed: { values, lines: fieldLines, body: lines.slice(after).join("\n"), bodyStart: after + 1 } };
 }
-function finding(path: string, code: string, message: string, hint: string, location?: LocalIssueFinding["location"], severity: LocalIssueSeverity = "error"): LocalIssueFinding { return { severity, code, path, location, message, hint, docs_ref: DOCS_REF }; }
+function finding(path: string, code: string, message: string, hint: string, location?: LocalIssueFinding["location"], severity: LocalIssueSeverity = "error", docsRef = DOCS_REF): LocalIssueFinding { return { severity, code, path, location, message, hint, docs_ref: docsRef }; }
 function withoutFencedCodeBlocks(body: string): string { let fence: "`" | "~" | null = null; return body.split(/\r?\n/).map((line) => { const marker = /^\s*(`{3,}|~{3,})/.exec(line)?.[1]; if (marker) { const type = marker[0] as "`" | "~"; if (fence === null) fence = type; else if (fence === type) fence = null; return ""; } return fence === null ? line : ""; }).join("\n"); }
 function listValue(value: unknown): string[] { return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string" && item.trim() !== "").map((item) => item.trim()) : []; }
 function dependencyList(value: unknown, path: string, field: "blocked_by" | "unblocks", findings: LocalIssueFinding[]): string[] {
@@ -133,6 +133,103 @@ function validatePolicy(values: Map<string, unknown>, lines: Map<string, number>
   }
 }
 function aliasesFor(path: string, root: string): string[] { const rel = relative(root, path).split(sep).join("/"); const noExt = rel.replace(/\.md$/i, ""); return [...new Set([noExt, basename(noExt), path.split(sep).join("/")])]; }
+function isDirectory(path: string): boolean { try { return statSync(path).isDirectory(); } catch { return false; } }
+function targetSearchDirectory(target: string, cwd: string): string {
+  const normalized = target.split(sep).join("/");
+  const globIndex = normalized.search(/[*?\[]/);
+  if (globIndex >= 0) {
+    const prefix = normalized.slice(0, globIndex);
+    const directoryPrefix = prefix.endsWith("/") ? prefix.slice(0, -1) : prefix.slice(0, prefix.lastIndexOf("/"));
+    return resolve(cwd, directoryPrefix || ".");
+  }
+  const path = resolve(cwd, target);
+  return isDirectory(path) ? path : dirname(path);
+}
+function discoverProjectRoot(target: string, cwd: string): string {
+  const candidate = targetSearchDirectory(target, cwd);
+  let current = candidate;
+  while (true) {
+    if (basename(current).toLowerCase() === "issues") return dirname(current);
+    if (isDirectory(join(current, "Issues"))) return current;
+    if (current !== candidate && (existsSync(join(current, "managed-projects.md")) || isDirectory(join(current, "4_Project")))) break;
+    const parent = dirname(current);
+    if (parent === current) break;
+    current = parent;
+  }
+  return candidate;
+}
+function findManagedProjects(target: string, cwd: string, projectRoot: string): string | undefined {
+  const targetDirectory = targetSearchDirectory(target, cwd);
+  const cwdRelativeToTarget = relative(cwd, targetDirectory);
+  const cwdIsAncestor = !isAbsolute(cwdRelativeToTarget)
+    && cwdRelativeToTarget !== ".."
+    && !cwdRelativeToTarget.startsWith(`..${sep}`);
+  const starts = [...new Set([projectRoot, targetDirectory, ...(cwdIsAncestor ? [cwd] : [])])];
+  for (const start of starts) {
+    let current = start;
+    while (true) {
+      const registryPath = join(current, "managed-projects.md");
+      if (existsSync(registryPath)) return registryPath;
+      const parent = dirname(current);
+      if (parent === current) break;
+      current = parent;
+    }
+  }
+  return undefined;
+}
+function registryRows(text: string): Map<string, boolean | undefined> {
+  const projects = new Map<string, boolean | undefined>();
+  const cellsFor = (line: string): string[] => line.trim().replace(/^\|/, "").replace(/\|$/, "").split("|").map((cell) => cell.trim());
+  const normalize = (value: string): string => value.toLowerCase().replace(/[^a-z0-9]/g, "");
+  const disabled = /\b(?:disabled|off|false|no|unmapped|notenabled)\b/i;
+  const separator = /^:?-{3,}:?$/;
+  const lines = text.split(/\r?\n/);
+  for (let index = 0; index < lines.length; index += 1) {
+    if (!lines[index]?.includes("|")) continue;
+    const headers = cellsFor(lines[index] ?? "");
+    const keyColumn = headers.findIndex((header) => ["projectkey", "key"].includes(normalize(header)));
+    if (keyColumn < 0) continue;
+    const importColumn = headers.findIndex((header) => {
+      const name = normalize(header);
+      return name.includes("localissueimport") || name.includes("issueimportmapping");
+    });
+    for (let rowIndex = index + 1; rowIndex < lines.length && lines[rowIndex]?.includes("|"); rowIndex += 1) {
+      const cells = cellsFor(lines[rowIndex] ?? "");
+      if (cells.every((cell) => separator.test(cell))) continue;
+      const key = cells[keyColumn]?.trim();
+      if (!key) continue;
+      const mapping = importColumn < 0 ? undefined : cells[importColumn];
+      projects.set(key, mapping === undefined ? undefined : disabled.test(normalize(mapping)) || disabled.test(mapping));
+    }
+    break;
+  }
+  return projects;
+}
+function readManagedProjects(registryPath: string | undefined): Map<string, boolean | undefined> | undefined {
+  if (!registryPath) return undefined;
+  try { return registryRows(readFileSync(registryPath, "utf8")); } catch { return undefined; }
+}
+function addRegistryFindings(records: IssueRecord[], projects: Map<string, boolean | undefined> | undefined): void {
+  if (!projects) return;
+  for (const record of records) {
+    const key = record.projectKey;
+    if (!key) continue;
+    if (!projects.has(key)) {
+      record.findings.push(finding(record.path, "PROJECT_KEY_UNKNOWN", `Project key '${key}' is not listed in managed-projects.md.`, "Check the project_key spelling. Draft and unregistered projects can still be linted locally.", { field: "project_key" }, "warning", "managed-projects.md"));
+    } else if (projects.get(key) === true) {
+      record.findings.push(finding(record.path, "LOCAL_ISSUE_IMPORT_DISABLED", `Local Issue Import mapping is disabled for project '${key}'.`, "Enable the Local Issue Import mapping in managed-projects.md when the project is ready for import.", { field: "project_key" }, "warning", "managed-projects.md"));
+    }
+  }
+}
+function isDraftIssue(path: string): boolean {
+  try { return parseFrontmatter(readFileSync(path, "utf8")).parsed?.values.get("status") === "draft"; } catch { return false; }
+}
+function humanPath(path: string): string {
+  const resolvedPath = resolve(path);
+  const relativePath = relative(process.cwd(), resolvedPath);
+  if (relativePath && !relativePath.startsWith(`..${sep}`) && relativePath !== ".." && !/^[A-Za-z]:/.test(relativePath)) return relativePath.split(sep).join("/");
+  return resolvedPath.split(sep).filter(Boolean).slice(-3).join("/");
+}
 type Expansion = { paths: string[]; findings: LocalIssueFinding[] };
 function allMarkdownFiles(root: string, maxDepth = Number.POSITIVE_INFINITY): Expansion {
   const paths: string[] = [], findings: LocalIssueFinding[] = [];
@@ -202,11 +299,13 @@ function lintFile(path: string, root: string): IssueRecord {
   const unblocks = dependencyList(values.get("unblocks"), path, "unblocks", findings);
   validateRequiredFields(values, path, findings);
   const status = typeof values.get("status") === "string" ? values.get("status") as string : "";
-  if (status && status !== "ready" && status !== "blocked") findings.push(finding(path, "STATUS_INVALID", `Status '${status}' is not importable.`, "Use status: ready or status: blocked.", { field: "status" }));
+  if (status && !["ready", "blocked", "draft"].includes(status)) findings.push(finding(path, "STATUS_INVALID", `Status '${status}' is not importable.`, "Use status: ready, blocked, or draft.", { field: "status" }));
   validatePolicy(values, lines, body, path, findings);
+  if (status === "draft" || values.get("ready_for_multica") === false) findings.push(finding(path, "DRAFT_NOT_IMPORTABLE", "This issue is a draft and is not ready for import.", "Continue linting locally; set status: ready and ready_for_multica: true when it is ready for import.", fieldLocation(lines, status === "draft" ? "status" : "ready_for_multica"), "info"));
   const importReady = values.get("ready_for_multica") === true && status === "ready";
   if (importReady) { const sectionBody = withoutFencedCodeBlocks(body); for (const section of REQUIRED_SECTIONS) { const pattern = new RegExp(`^##\\s+${section.replace(/[.*+?^${}()|[\\]\\\\]/g, "\\$&")}\\s*$`, "mi"); if (!pattern.test(sectionBody)) findings.push(finding(path, "BODY_SECTION_REQUIRED", `Required body section '${section}' is missing.`, `Add a '## ${section}' section to the issue body.`, { section, line: bodyStart })); } }
-  return { path, aliases, status, blockedBy, unblocks, ready: importReady && findings.every((item) => item.severity !== "error"), findings };
+  const projectKey = typeof values.get("project_key") === "string" ? values.get("project_key") as string : undefined;
+  return { path, aliases, status, projectKey, blockedBy, unblocks, ready: importReady && findings.every((item) => item.severity !== "error"), findings };
 }
 function dependencyFindings(records: IssueRecord[]): void {
   const byAlias = new Map<string, IssueRecord>(), ambiguousAliases = new Set<string>();
@@ -250,6 +349,8 @@ function dependencyFindings(records: IssueRecord[]): void {
 export function localIssueLint(input: LocalIssueLintInput): LocalIssueLintResult {
   const target = input.target.trim(), root = input.projectRoot ? resolve(input.projectRoot) : process.cwd();
   if (!target) { const allFindings = [finding(target, "TARGET_REQUIRED", "target is required", "Pass a local issue markdown file path.")], findings = boundedFindings(allFindings, input.maxFindings); return { ok: false, summary: summarize(allFindings, 0, 0), findings }; }
+  const projectRoot = input.projectRoot ? root : discoverProjectRoot(target, root);
+  const registry = readManagedProjects(findManagedProjects(target, root, projectRoot));
   let expansion: Expansion;
   try { expansion = expandTarget(target, root); }
   catch (error) {
@@ -263,10 +364,45 @@ export function localIssueLint(input: LocalIssueLintInput): LocalIssueLintResult
     const findings = boundedFindings(allFindings, input.maxFindings);
     return { ok: false, summary: summarize(allFindings, 0, 0), findings };
   }
-  const records = expansion.paths.sort((a, b) => a.localeCompare(b)).map((path) => lintFile(path, root)); dependencyFindings(records);
+  const paths = input.includeDrafts === false ? expansion.paths.filter((path) => !isDraftIssue(path)) : expansion.paths;
+  if (!paths.length) {
+    const allFindings = [
+      ...expansion.findings,
+      finding(resolve(root, target), "DRAFTS_EXCLUDED", "Only draft issues matched the target, and includeDrafts is false.", "Set includeDrafts: true to lint draft issues.", undefined, "info"),
+    ];
+    const findings = boundedFindings(allFindings, input.maxFindings);
+    return { ok: allFindings.every((item) => item.severity !== "error"), summary: summarize(allFindings, 0, 0), findings };
+  }
+  const records = paths.sort((a, b) => a.localeCompare(b)).map((path) => lintFile(path, projectRoot));
+  dependencyFindings(records);
+  addRegistryFindings(records, registry);
   for (const record of records) record.ready = record.ready && record.findings.every((item) => item.severity !== "error");
   const allFindings = [...expansion.findings, ...records.flatMap((record) => record.findings)], findings = boundedFindings(allFindings, input.maxFindings), ready = records.filter((record) => record.ready).length;
   return { ok: allFindings.every((item) => item.severity !== "error"), summary: summarize(allFindings, records.length, ready), findings };
 }
-export function formatLintSummary(result: LocalIssueLintResult, targetLabel?: string): string { const lines = ["Local Issue Lint (walking skeleton)", targetLabel ? `Target: ${targetLabel}` : undefined, `Scanned: ${result.summary.scanned} | Ready: ${result.summary.ready} | Errors: ${result.summary.errors} | Warnings: ${result.summary.warnings} | Hints: ${result.summary.hints}`, result.ok ? "OK" : "FAILED"].filter((line): line is string => line !== undefined); if (result.findings.length) { lines.push("", "Findings:"); for (const item of result.findings) { lines.push(`- [${item.severity}] ${item.code}: ${item.message}`); lines.push(`  hint: ${item.hint}`); } } return lines.join("\n"); }
+export function formatLintSummary(result: LocalIssueLintResult, targetLabel?: string): string {
+  const lines = ["Local Issue Lint", targetLabel ? `Target: ${humanPath(targetLabel)}` : undefined, `Scanned: ${result.summary.scanned} | Ready: ${result.summary.ready} | Errors: ${result.summary.errors} | Warnings: ${result.summary.warnings} | Hints: ${result.summary.hints}`, result.ok ? "OK" : "FAILED"].filter((line): line is string => line !== undefined);
+  if (result.findings.length) {
+    const severityOrder: LocalIssueSeverity[] = ["error", "warning", "info"];
+    const ordered = [...result.findings].sort((a, b) => severityOrder.indexOf(a.severity) - severityOrder.indexOf(b.severity) || a.path.localeCompare(b.path) || a.code.localeCompare(b.code));
+    const visible = ordered.slice(0, 10).sort((a, b) => a.path.localeCompare(b.path) || severityOrder.indexOf(a.severity) - severityOrder.indexOf(b.severity) || a.code.localeCompare(b.code));
+    const byPath = new Map<string, LocalIssueFinding[]>();
+    for (const item of visible) byPath.set(item.path, [...(byPath.get(item.path) ?? []), item]);
+    lines.push("", "Findings:");
+    for (const [path, items] of byPath) {
+      lines.push(`- ${humanPath(path)}`);
+      for (const severity of severityOrder) {
+        const group = items.filter((item) => item.severity === severity);
+        if (!group.length) continue;
+        lines.push(`  ${severity}:`);
+        for (const item of group) {
+          lines.push(`    ${item.code}: ${item.message}`);
+          lines.push(`      Hint: ${item.hint}${item.docs_ref ? ` (Docs: ${item.docs_ref})` : ""}`);
+        }
+      }
+    }
+    if (result.findings.length > visible.length) lines.push(`- … ${result.findings.length - visible.length} more findings omitted; use JSON output for the full list.`);
+  }
+  return lines.join("\n");
+}
 export function emptyLintResult(): LocalIssueLintResult { return { ok: true, summary: { ...EMPTY_SUMMARY }, findings: [] }; }

@@ -398,7 +398,7 @@ test("localIssueLint ignores fenced acceptance examples when checking required b
   } finally { fs.rmSync(tmpDir, { recursive: true, force: true }); }
 });
 
-test("formatLintSummary renders readable stub output", () => {
+test("formatLintSummary renders a concise human summary", () => {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "local-issue-lint-"));
   const issuePath = path.join(tmpDir, "sample-issue.md");
   fs.writeFileSync(issuePath, "---\ntitle: Example\nready_for_multica: true\nstatus: ready\nproject_key: demo\n---\n## Parent\n## What to build\n## Acceptance criteria\n");
@@ -407,9 +407,159 @@ test("formatLintSummary renders readable stub output", () => {
     const result = localIssueLint({ target: issuePath });
     const summary = formatLintSummary(result, issuePath);
 
-    assert.match(summary, /Local Issue Lint \(walking skeleton\)/);
+    assert.match(summary, /^Local Issue Lint/);
     assert.match(summary, /Scanned: 1/);
     assert.match(summary, /OK/);
+    assert.equal(summary.includes(tmpDir), false);
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test("localIssueLint discovers registry metadata for draft and unregistered project folders", () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "local-issue-lint-"));
+  const vault = path.join(tmpDir, "vault");
+  const issues = path.join(vault, "4_Project", "OSS", "draft-project", "Issues");
+  fs.mkdirSync(issues, { recursive: true });
+  fs.writeFileSync(path.join(vault, "managed-projects.md"), "| project_key | Local Issue Import mapping |\n| --- | --- |\n| known-project | enabled |\n");
+  fs.writeFileSync(path.join(issues, "draft.md"), "---\ntitle: Draft\nready_for_multica: false\nstatus: draft\nproject_key: local-draft\n---\n## What to build\nDraft work.\n");
+
+  try {
+    const target = path.join(issues, "draft.md");
+    const result = localIssueLint({ target });
+    assert.equal(result.ok, true);
+    assert.equal(result.summary.scanned, 1);
+    assert.equal(result.summary.ready, 0);
+    assert.equal(result.summary.errors, 0);
+    assert.ok(result.findings.some((item) => item.code === "PROJECT_KEY_UNKNOWN" && item.severity === "warning"));
+    assert.ok(result.findings.some((item) => item.code === "DRAFT_NOT_IMPORTABLE" && item.severity === "info"));
+    assert.equal(result.findings.some((item) => item.code === "STATUS_INVALID"), false);
+    assert.deepEqual(localIssueLint({ target }), result);
+
+    const summary = formatLintSummary(result, target);
+    assert.match(summary, /warning:/);
+    assert.match(summary, /info:/);
+    assert.match(summary, /Docs: managed-projects\.md/);
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test("localIssueLint warns when a registered project's Local Issue Import mapping is disabled", () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "local-issue-lint-"));
+  const vault = path.join(tmpDir, "vault");
+  const issues = path.join(vault, "4_Project", "OSS", "demo", "Issues");
+  fs.mkdirSync(issues, { recursive: true });
+  fs.writeFileSync(path.join(vault, "managed-projects.md"), "| project_key | Local Issue Import mapping |\n| --- | --- |\n| demo | disabled |\n");
+  fs.writeFileSync(path.join(issues, "ready.md"), "---\ntitle: Ready\nready_for_multica: true\nstatus: ready\nproject_key: demo\n---\n## Parent\n## What to build\nImplement it.\n## Acceptance criteria\n- [ ] It works.\n");
+
+  try {
+    const result = localIssueLint({ target: issues });
+    assert.equal(result.ok, true);
+    assert.equal(result.summary.ready, 1);
+    assert.ok(result.findings.some((item) => item.code === "LOCAL_ISSUE_IMPORT_DISABLED" && item.severity === "warning"));
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test("localIssueLint remains usable without managed-projects.md and can exclude drafts explicitly", () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "local-issue-lint-"));
+  const issues = path.join(tmpDir, "unregistered", "Issues");
+  fs.mkdirSync(issues, { recursive: true });
+  fs.writeFileSync(path.join(issues, "draft.md"), "---\ntitle: Draft\nready_for_multica: false\nstatus: draft\nproject_key: local-only\n---\n");
+
+  try {
+    const target = path.join(issues, "draft.md");
+    const result = localIssueLint({ target });
+    assert.equal(result.ok, true);
+    assert.equal(result.summary.errors, 0);
+    assert.equal(result.findings.some((item) => item.code === "PROJECT_KEY_UNKNOWN"), false);
+
+    const excluded = localIssueLint({ target: issues, includeDrafts: false });
+    assert.equal(excluded.ok, true);
+    assert.equal(excluded.summary.scanned, 0);
+    assert.equal(excluded.findings[0].code, "DRAFTS_EXCLUDED");
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test("localIssueLint ignores a cwd registry unrelated to an external target", () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "local-issue-lint-"));
+  const cwd = path.join(tmpDir, "cwd");
+  const outsideIssues = path.join(tmpDir, "outside", "project", "Issues");
+  fs.mkdirSync(cwd, { recursive: true });
+  fs.mkdirSync(outsideIssues, { recursive: true });
+  fs.writeFileSync(path.join(cwd, "managed-projects.md"), "| project_key | Local Issue Import mapping |\n| --- | --- |\n| cwd-project | enabled |\n");
+  fs.writeFileSync(path.join(outsideIssues, "ready.md"), "---\ntitle: External\nready_for_multica: true\nstatus: ready\nproject_key: outside-project\n---\n## Parent\n## What to build\nImplement it.\n## Acceptance criteria\n- [ ] It works.\n");
+  const previousCwd = process.cwd();
+
+  try {
+    process.chdir(cwd);
+    const result = localIssueLint({ target: path.join(outsideIssues, "ready.md") });
+    assert.equal(result.ok, true);
+    assert.equal(result.findings.some((item) => item.code === "PROJECT_KEY_UNKNOWN"), false);
+  } finally {
+    process.chdir(previousCwd);
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test("localIssueLint reports unreadable directories when all matched issues are excluded drafts", (t) => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "local-issue-lint-"));
+  const issues = path.join(tmpDir, "issues");
+  const unreadable = path.join(issues, "unreadable");
+  fs.mkdirSync(unreadable, { recursive: true });
+  fs.writeFileSync(path.join(issues, "draft.md"), "---\ntitle: Draft\nready_for_multica: false\nstatus: draft\nproject_key: local-only\n---\n");
+  let permissionsChanged = false;
+
+  try {
+    try {
+      fs.chmodSync(unreadable, 0);
+      permissionsChanged = true;
+    } catch {
+      t.skip("The platform does not allow changing directory permissions for this test.");
+      return;
+    }
+
+    let readDenied = false;
+    try {
+      fs.readdirSync(unreadable);
+    } catch (error) {
+      if (error.code !== "EACCES" && error.code !== "EPERM") throw error;
+      readDenied = true;
+    }
+    if (!readDenied) {
+      t.skip("The current user can still read directories with mode 000.");
+      return;
+    }
+
+    const result = localIssueLint({ target: issues, includeDrafts: false, maxFindings: 1 });
+    assert.equal(result.ok, false);
+    assert.equal(result.summary.errors, 1);
+    assert.equal(result.findings[0]?.code, "TARGET_READ_FAILED");
+  } finally {
+    if (permissionsChanged) fs.chmodSync(unreadable, 0o700);
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test("formatLintSummary keeps later errors inside the ten-finding limit", () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "local-issue-lint-"));
+  const issue = "---\ntitle: Draft\nready_for_multica: false\nstatus: draft\nproject_key: local-only\n---\n";
+  for (let index = 0; index < 10; index += 1) {
+    fs.writeFileSync(path.join(tmpDir, `a-${String(index).padStart(2, "0")}-draft.md`), issue);
+  }
+  fs.writeFileSync(path.join(tmpDir, "z-error.md"), "not an issue file\n");
+
+  try {
+    const result = localIssueLint({ target: tmpDir });
+    const summary = formatLintSummary(result);
+    assert.equal(result.ok, false);
+    assert.match(summary, /FAILED/);
+    assert.match(summary, /FRONTMATTER_MISSING/);
+    assert.match(summary, /1 more findings omitted/);
   } finally {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }
