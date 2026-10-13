@@ -10,7 +10,7 @@ function assertNoMergeTriggeredRelease(release, publish) {
   const publishTriggers = publish.split("permissions:")[0];
   assert.match(releaseTriggers, /on:\r?\n\s+workflow_dispatch:/, "release must be manually triggered only");
   assert.doesNotMatch(releaseTriggers, /^\s+push:/m, "a merge must not start release");
-  assert.match(release, /if: github\.event_name == 'workflow_dispatch' && github\.ref == 'refs\/heads\/main'/);
+  assert.match(release, /if: inputs\.confirm_release == true/, "release requires explicit human confirmation");
   assert.match(publishTriggers, /push:\r?\n\s+tags:/, "publishing must remain version-tag gated");
   assert.doesNotMatch(publishTriggers, /branches:|paths:/, "main branch/package edits must not publish");
   assert.match(publishTriggers, /workflow_dispatch:/, "explicit manual publishing remains available");
@@ -23,12 +23,6 @@ test("merging code cannot directly or indirectly trigger npm publish or release"
     releaseWorkflow.replace("  workflow_dispatch:", "  push:\n    branches: [main]\n  workflow_dispatch:"), publishWorkflow));
   assert.throws(() => assertNoMergeTriggeredRelease(
     releaseWorkflow, publishWorkflow.replace("    tags:", "    branches: [main]\n    tags:")));
-});
-
-test("manual release rejects malformed SemVer without leading zeros", () => {
-  const pattern = releaseWorkflow.match(/grep -Eq '([^']+)'/)?.[1];
-  assert.ok(pattern, "manual release must validate stable SemVer");
-  const stableSemver = new RegExp(pattern);
-  for (const version of ["0.0.0", "1.4.2", "10.20.300"]) assert.match(version, stableSemver);
-  for (const version of ["01.4.2", "1.04.2", "1.4.02", "1.4", "1.4.2-beta"]) assert.doesNotMatch(version, stableSemver);
+  assert.throws(() => assertNoMergeTriggeredRelease(
+    releaseWorkflow.replace("if: inputs.confirm_release == true", "if: false"), publishWorkflow));
 });

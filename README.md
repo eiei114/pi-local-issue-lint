@@ -91,7 +91,7 @@ The tool returns the complete JSON result (unlike the shorter human command outp
 }
 ```
 
-`ok` is false when at least one error finding exists. Each finding includes a severity, stable code, path, message, actionable hint, and a canonical documentation reference; `location` is included when available. Summary counts cover all findings even when an optional `maxFindings` limit truncates the returned list.
+`ok` is false when at least one error finding exists. Each finding includes a severity, stable code, path, message, and actionable hint; `docs_ref` and `location` are included when available. Summary counts cover all findings even when an optional `maxFindings` limit truncates the returned list.
 
 ## Examples
 

@@ -1,6 +1,13 @@
 import { appendFileSync, readFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 
+const numericIdentifier = "(?:0|[1-9][0-9]*)";
+const prereleaseIdentifier = `(?:${numericIdentifier}|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*)`;
+const buildIdentifier = "[0-9A-Za-z-]+";
+const semverPattern = new RegExp(
+  `^${numericIdentifier}\\.${numericIdentifier}\\.${numericIdentifier}(?:-${prereleaseIdentifier}(?:\\.${prereleaseIdentifier})*)?(?:\\+${buildIdentifier}(?:\\.${buildIdentifier})*)?$`,
+);
+
 function git(args) {
   const result = spawnSync("git", args, { encoding: "utf8" });
   if (result.error) throw result.error;
@@ -10,9 +17,7 @@ function git(args) {
 function versionFromJson(json) {
   try {
     const version = JSON.parse(json).version;
-    return typeof version === "string" && /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/.test(version)
-      ? version
-      : null;
+    return typeof version === "string" && semverPattern.test(version) ? version : null;
   } catch {
     return null;
   }
@@ -26,7 +31,7 @@ function versionAt(ref) {
 function latestReleaseTag() {
   const tags = git(["tag", "--list", "v*", "--sort=-version:refname"]);
   if (tags === null) return null;
-  return tags.split(/\r?\n/).find((tag) => /^v\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/.test(tag)) ?? null;
+  return tags.split(/\r?\n/).find((tag) => tag.startsWith("v") && semverPattern.test(tag.slice(1))) ?? null;
 }
 
 function output(released, tag) {
