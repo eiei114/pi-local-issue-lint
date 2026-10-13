@@ -15,6 +15,10 @@ const validResult = toolResult({ ok: true, summary: { scanned: 1, errors: 0 }, f
 const agentEnd = { type: "agent_end", messages: [{ role: "system", toolsAdded: [{ name: "local_issue_lint" }] }] };
 const observations = (responses = [registration, validResult, marker, agentEnd], fullOutput = "", exit_code = 0, process_exited = true) =>
   ({ responses, fullOutput, exit_code, process_exited, expectedVersion: "1.1.0" });
+const reloadObservations = (firstResponses = [registration], secondResponses = [registration, validResult, marker], fullOutput = "", exit_code = 0, process_exited = true) => ({
+  ...observations([...firstResponses, ...secondResponses], fullOutput, exit_code, process_exited),
+  responsesByProcess: [firstResponses, secondResponses],
+});
 
 test("contract and JSONL parser accept LF and CRLF response lines", () => {
   assert.equal(VERIFICATION_CONTRACT, "pi-sdk-behavior-v2");
@@ -37,14 +41,20 @@ test("handled error path requires the actual TARGET_NOT_FOUND result", () => {
 });
 
 test("reload requires second-host registration, feature response, and clean process exit", () => {
-  const good = behaviorAssertions("reload_cleanup", observations());
+  const good = behaviorAssertions("reload_cleanup", reloadObservations());
   assert.deepEqual(good.map((item) => item.id), ["reloaded_extension_registered", "reloaded_feature_response", "clean_shutdown"]);
   assert.ok(good.every((item) => item.passed));
-  for (const responses of [[], [validResult, marker], [registration], [registration, validResult]]) {
-    assert.ok(behaviorAssertions("reload_cleanup", observations(responses)).some((item) => !item.passed));
+  const firstHostOnlyRegistration = reloadObservations([registration], [validResult, marker]);
+  assert.equal(behaviorAssertions("reload_cleanup", firstHostOnlyRegistration)[0].passed, false);
+  const firstHostOnlyFeature = reloadObservations([registration, validResult, marker], [registration]);
+  assert.equal(behaviorAssertions("reload_cleanup", firstHostOnlyFeature)[1].passed, false);
+  const missingSecondHost = { ...reloadObservations([registration, validResult, marker]), responsesByProcess: [[registration, validResult, marker]] };
+  assert.ok(behaviorAssertions("reload_cleanup", missingSecondHost).slice(0, 2).every((item) => !item.passed));
+  for (const secondResponses of [[], [validResult, marker], [registration], [registration, validResult]]) {
+    assert.ok(behaviorAssertions("reload_cleanup", reloadObservations([registration], secondResponses)).some((item) => !item.passed));
   }
   for (const [output, code, exited] of [["shutdown error", 0, true], ["UnhandledPromiseRejection", 0, true], ["", 1, true], ["", 0, false]]) {
-    assert.equal(behaviorAssertions("reload_cleanup", observations(undefined, output, code, exited))[2].passed, false);
+    assert.equal(behaviorAssertions("reload_cleanup", reloadObservations([registration], undefined, output, code, exited))[2].passed, false);
   }
 });
 

@@ -5,7 +5,21 @@
 ### Changed
 
 - Pin the Pi SDK development dependencies to 1.1.0 and verify the extension against the real Pi host.
-- Bump the package patch version to 0.0.2.
+- Require Node.js 22.19.0 or later to match the Pi SDK 1.1.0 runtime.
+- Bump the package patch version to 0.1.1.
+
+## [0.1.0] - 2026-10-12
+
+### Added
+
+- Discover project folders and optionally add read-only `managed-projects.md` registry hints.
+- Lint draft and unregistered issue folders, with concise findings grouped by file and severity.
+- Document OSS import and Incubator Stage B authoring examples.
+
+### Fixed
+
+- Keep registry lookup scoped to the target and preserve directory-read errors when excluding drafts.
+- Prioritize errors in concise summaries and require explicit manual confirmation before release.
 
 ## [0.0.1] - 2026-09-30
 

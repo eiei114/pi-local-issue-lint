@@ -125,12 +125,14 @@ function runRpcCase(name, target, { commandsOnly = false } = {}) {
 }
 
 function collectCase(name, processResults, expectedVersion) {
-  const responses = processResults.flatMap((result) => result.responses);
+  const responsesByProcess = processResults.map((result) => result.responses);
+  const responses = responsesByProcess.flat();
   const fullOutput = processResults.map((result) => result.output).join("\n");
   const exitCode = processResults.every((result) => result.exitCode === 0) ? 0 : 1;
   const processExited = processResults.every((result) => result.processExited);
   const assertions = behaviorAssertions(name, {
     responses,
+    responsesByProcess,
     fullOutput,
     exit_code: exitCode,
     process_exited: processExited,

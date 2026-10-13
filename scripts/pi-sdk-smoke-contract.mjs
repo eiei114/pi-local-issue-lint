@@ -72,10 +72,13 @@ function featureSucceeded(responses) {
     && finalMarker(responses);
 }
 
-export function behaviorAssertions(name, { responses, fullOutput, exit_code, process_exited, expectedVersion }) {
-  const registration = commandRegistration(responses);
-  const execution = toolResult(responses);
-  const feature = featureSucceeded(responses);
+export function behaviorAssertions(name, { responses, responsesByProcess, fullOutput, exit_code, process_exited, expectedVersion }) {
+  const caseResponses = name === "reload_cleanup" && responsesByProcess
+    ? responsesByProcess[1] ?? []
+    : responses;
+  const registration = commandRegistration(caseResponses);
+  const execution = toolResult(caseResponses);
+  const feature = featureSucceeded(caseResponses);
   if (name === "extension_load") {
     const tools = registeredTools(responses);
     return [assertion("extension_registered", "The real Pi host registers the package slash command",
