@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### Changed
+
+- Pin the Pi SDK development dependencies to 1.1.0 and verify the extension against the real Pi host.
+- Require Node.js 22.19.0 or later to match the Pi SDK 1.1.0 runtime.
+- Bump the package patch version to 0.1.1.
+
 ## [0.1.0] - 2026-10-12
 
 ### Added
