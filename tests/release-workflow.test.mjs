@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -14,7 +14,7 @@ function git(cwd, ...args) {
   return execFileSync("git", args, { cwd, encoding: "utf8" }).trim();
 }
 
-function createReleaseFixture(t) {
+function createReleaseFixture(t, currentVersion = "0.1.0") {
   const cwd = mkdtempSync(join(tmpdir(), "release-version-check-"));
   t.after(() => rmSync(cwd, { recursive: true, force: true }));
   execFileSync("git", ["init", "--quiet", "-b", "main"], { cwd });
@@ -30,13 +30,13 @@ function createReleaseFixture(t) {
 
   const baselineCommit = commitVersion("0.0.1");
   git(cwd, "tag", "v0.0.1", baselineCommit);
-  commitVersion("0.1.0");
+  commitVersion(currentVersion);
   return { cwd, baselineCommit };
 }
 
 function runReleaseCheck(cwd, eventName, before = "") {
   const outputPath = join(cwd, `github-output-${Date.now()}-${Math.random()}`);
-  const stdout = execFileSync(process.execPath, [releaseCheckScript], {
+  const result = spawnSync(process.execPath, [releaseCheckScript], {
     cwd,
     encoding: "utf8",
     env: {
@@ -46,9 +46,11 @@ function runReleaseCheck(cwd, eventName, before = "") {
       GITHUB_OUTPUT: outputPath,
     },
   });
+  if (result.error) throw result.error;
+  if (result.status !== 0) throw new Error(result.stderr || `release check exited with ${result.status}`);
   const outputs = Object.fromEntries(readFileSync(outputPath, "utf8").trim().split(/\r?\n/).map((line) => line.split("=")));
   rmSync(outputPath);
-  return { stdout, outputs };
+  return { stdout: result.stdout, outputs };
 }
 
 test("release workflow is manually dispatched with explicit confirmation", () => {
@@ -73,6 +75,24 @@ test("manual release compares the package version with the latest release tag", 
   const alreadyReleased = runReleaseCheck(cwd, "workflow_dispatch");
   assert.match(alreadyReleased.stdout, /package\.json version did not change/);
   assert.deepEqual(alreadyReleased.outputs, { released: "false" });
+});
+
+test("manual release accepts SemVer prerelease and build metadata", (t) => {
+  const version = "1.4.2-beta.1+build.7";
+  const { cwd } = createReleaseFixture(t, version);
+
+  const result = runReleaseCheck(cwd, "workflow_dispatch");
+  assert.equal(result.stdout, `Version bump detected: 0.0.1 -> ${version}.\n`);
+  assert.deepEqual(result.outputs, { released: "true", tag: `v${version}` });
+});
+
+test("manual release rejects malformed SemVer and leading-zero numeric identifiers", (t) => {
+  const { cwd } = createReleaseFixture(t);
+
+  for (const version of ["01.4.2", "1.04.2", "1.4.02", "1.4", "1.4.2-01", "1.4.2+build..7"]) {
+    writeFileSync(join(cwd, "package.json"), `${JSON.stringify({ version }, null, 2)}\n`);
+    assert.throws(() => runReleaseCheck(cwd, "workflow_dispatch"), /does not contain a valid version/);
+  }
 });
 
 test("push release comparison still uses the event before commit", (t) => {
