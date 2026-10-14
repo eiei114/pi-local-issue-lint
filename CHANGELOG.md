@@ -1,11 +1,12 @@
 # Changelog
 
-## Unreleased
-
 ## [0.1.1] - 2026-10-13
 
 ### Changed
 
+- Pin the Pi SDK development dependencies to 1.1.0 and verify the extension against the real Pi host.
+- Require Node.js 22.19.0 or later to match the Pi SDK 1.1.0 runtime.
+- Bump the package patch version to 0.1.1.
 - Document npm and Git installation, Pi tool/command usage, the JSON result contract, human hints, and read-only limitations.
 - Add a human-owned first-publish handoff; no package publication is performed by this release-prep change.
 
