@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.2] - 2026-10-16
+
+### Changed
+
+- Pin the Pi SDK development dependencies to 1.2.0 and update actual-host smoke verification.
+- Bump the package patch version to 0.1.2.
+
 ## [0.1.1] - 2026-10-13
 
 ### Changed
