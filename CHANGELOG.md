@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.3] - 2026-10-20
+
+### Changed
+
+- Upgrade the pinned Pi SDK development dependencies to 1.3.0 and verify against the actual Pi host.
+- Bump the package patch version to 0.1.3 for the SDK compatibility update.
+
 ## [0.1.2] - 2026-10-16
 
 ### Changed

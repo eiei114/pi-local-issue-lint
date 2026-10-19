@@ -14,7 +14,7 @@ const registration = { type: "response", command: "get_commands", success: true,
 const validResult = toolResult({ ok: true, summary: { scanned: 1, errors: 0 }, findings: [] });
 const agentEnd = { type: "agent_end", messages: [{ role: "system", toolsAdded: [{ name: "local_issue_lint" }] }] };
 const observations = (responses = [registration, validResult, marker, agentEnd], fullOutput = "", exit_code = 0, process_exited = true) =>
-  ({ responses, fullOutput, exit_code, process_exited, expectedVersion: "1.2.0" });
+  ({ responses, fullOutput, exit_code, process_exited, expectedVersion: "1.3.0" });
 const reloadObservations = (firstResponses = [registration], secondResponses = [registration, validResult, marker], fullOutput = "", exit_code = 0, process_exited = true) => ({
   ...observations([...firstResponses, ...secondResponses], fullOutput, exit_code, process_exited),
   responsesByProcess: [firstResponses, secondResponses],
@@ -63,8 +63,8 @@ test("extension registration and native shell assertions fail closed on missing 
   assert.equal(behaviorAssertions("extension_load", observations([]))[0].passed, false);
   assert.equal(behaviorAssertions("extension_load", observations([{ ...registration, success: false }]))[0].passed, false);
   assert.equal(behaviorAssertions("extension_load", observations([registration, { type: "agent_end", messages: [] }]))[0].passed, false);
-  assert.equal(behaviorAssertions("host_shell", observations([], "1.2.0\r\n"))[0].passed, true);
-  for (const value of ["", "11.1.0", "1.0.0", "1.2.0 extra"]) {
+  assert.equal(behaviorAssertions("host_shell", observations([], "1.3.0\r\n"))[0].passed, true);
+  for (const value of ["", "11.1.0", "1.0.0", "1.3.0 extra"]) {
     assert.equal(behaviorAssertions("host_shell", observations([], value))[0].passed, false);
   }
 });
